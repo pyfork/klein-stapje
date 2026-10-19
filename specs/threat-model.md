@@ -1,7 +1,7 @@
 # Threat model: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-THREAT-MODEL.md.
-     Status: draft. Accepted threats decided: A-1, A-2. Awaiting: A-3 to A-7. -->
+     Status: draft. Accepted threats decided: A-1 to A-3. Awaiting: A-4 to A-7. -->
 
 Last updated: 2026-10-19, first draft
 
@@ -23,7 +23,7 @@ Last updated: 2026-10-19, first draft
 | TB-1 | Browser to app (through Cloudflare and nginx) | Anyone on the internet; then the signed-in user | The app | Sign-in, pasted ads, uploads, settings, the session cookie, SSE progress, browser spans |
 | TB-2 | App to Claude API | The app | Anthropic | Ad text and reference CV text out; model output in (untrusted) |
 | TB-3 | App and browser to Spaces | The app (keys); the browser (signed links) | DigitalOcean | PDFs, uploaded files, encrypted dumps; signed download links |
-| TB-4 | App to the telemetry backend | The app | Grafana Cloud | Route patterns, timings and counts; no personal data |
+| TB-4 | App and server to the telemetry backend | The app; the server's log shipper | Grafana Cloud | Route patterns, timings and counts; the server's SSH sign-in and sudo events; no personal data |
 | TB-5 | The shared server | Other sites and their users on the same server | cvwriter's processes, files and database | Memory and CPU contention; anything a compromised neighbour reaches |
 
 ## Riskiest flows
@@ -86,13 +86,16 @@ Last updated: 2026-10-19, first draft
 | # | Threat | STRIDE | Answer | Where |
 |---|---|---|---|---|
 | T-33 | Another site on the shared host's origin reads cvwriter's data | Information disclosure | Rule: its own subdomain | ADR-005 |
-| T-34 | A compromised neighbour on the shared server reaches cvwriter | Elevation of privilege | Accepted, see A-3 | — |
+| T-34 | A compromised neighbour on the shared server becomes root and reaches cvwriter | Elevation of privilege | Rule, before go-live: no service on the server runs as an account that can use sudo, and every account with full sudo is a named admin account in use; cvwriter's units are sandboxed. Residual accepted, see A-3 | Architecture, Server units and One-time setup |
 | T-35 | Real ads, real CVs or the private test set are committed to the public repository | Information disclosure | Rule: content rules; a pre-push check; the test set lives only on the server | Content rules |
+| T-36 | A local process skips nginx, calls the app directly and fakes the client IP, defeating the per-IP sign-in delays | Spoofing | Rule: no TCP port; the app listens on a unix socket that only nginx's user can open | Architecture, Server units; socket permission test |
+| T-37 | Root on the server deletes every backup and every old file version | Tampering | Rule: the server's storage keys can't delete object versions; checked in the walking skeleton, with a fallback recorded if Spaces can't do it | Architecture, One-time setup |
+| T-38 | A server compromise goes unnoticed | Repudiation | Rule: SSH sign-ins and sudo events are shipped off the server, with an alert on either by an account other than the admin account | Architecture, Telemetry |
 
 ## Accepted
 - **A-1** (T-14): the master key and the database share one server, so root access reads both; the encryption protects dumps and backups only. Accepted (the owner's decision), because there is one server and one user. A cloud key service was considered and deferred: the server has no cloud identity, so it would hold that service's credential too, and root could still decrypt through it; it adds logging and revocation, not prevention. Revisit when there are two app servers or a second user: move the master key to a key service.
 - **A-2** (T-30): files and every backup sit with one provider, in one account. Accepted (the owner's choice). Revisit when the first CVs are sent to employers, or on a Spaces incident.
-- **A-3** (T-34): cvwriter shares a server with other sites; a root compromise there reaches everything. Accepted, because of the hosting choice in the brief. Revisit when free memory at peak drops under 500 MB, another tenant is affected, or a second user joins.
+- **A-3** (T-34): cvwriter shares a server with other sites, and stays there (the owner's decision). Root on that server reaches cvwriter's data and keys, and nothing on the server can stop it. Accepted, with conditions that narrow the ways to root (T-34), limit what root can take or destroy (T-15's spend limit on the key, T-37) and make a compromise visible off the server (T-38). Revisit when free memory at peak drops under 500 MB, another tenant is affected, or a second user joins.
 - **A-4** (T-17): prompt injection can still bend a CV's wording. Accepted, because the model has no tools, its output is checked, and the user reads every CV before sending it. Revisit if the model is ever given tools or a CV is sent without review.
 - **A-5**: no second factor at sign-in. Accepted for one user, with a long random password. Revisit when a second user joins (passkeys).
 - **A-6** (T-5): no audit log of who changed what. Accepted, because there is one user and the history that matters is insert-only. Revisit when a second user joins.
@@ -111,10 +114,11 @@ Last updated: 2026-10-19, first draft
 
 **The master key or the server is compromised**
 1. Take the app offline.
-2. Generate a new master key; re-encrypt the stored API key under the new `key_version`.
-3. Revoke and replace the Claude key, both storage keys, the database passwords and the backup encryption key.
-4. Restore onto a clean server from the latest dump if needed, using the offline key copy.
-5. Delete every session, so everyone signs in again.
+2. Read the off-server SSH and sudo log (T-38) to find the way in and when it started.
+3. Generate a new master key; re-encrypt the stored API key under the new `key_version`.
+4. Revoke and replace the Claude key, both storage keys, the database passwords and the backup encryption key.
+5. Restore onto a clean server from the latest dump if needed, using the offline key copy.
+6. Delete every session, so everyone signs in again.
 
 **A backup fails, or the restore test fails**
 1. The alert names the step. Run the backup job by hand and read its log.

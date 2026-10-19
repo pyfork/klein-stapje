@@ -78,7 +78,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     spa[Single-page app<br/>React 19 + TS, Vite<br/>ADR-003] -->|HTTPS/JSON + SSE, session cookie| nginx[nginx<br/>own server block<br/>ADR-005]
-    nginx -->|HTTP, localhost, X-Real-IP| app[cvwriter binary<br/>Go 1.27 + chi<br/>embeds the SPA<br/>ADR-003, ADR-004]
+    nginx -->|HTTP over a unix socket, X-Real-IP| app[cvwriter binary<br/>Go 1.27 + chi<br/>embeds the SPA<br/>ADR-003, ADR-004]
     app -->|SQL as cvwriter| db[(PostgreSQL 18<br/>ADR-002)]
     app -->|exec, deadline| typst[typst, pinned<br/>PDF render<br/>ADR-003]
     app -->|S3 API, files key| files[(cvwriter-files<br/>ADR-004)]
@@ -124,18 +124,20 @@ Every query on a user-owned table filters on `user_id`; a CI check enforces it (
 ### Server units
 | Unit | Runs | Credentials (`LoadCredential=`) | Limits |
 |---|---|---|---|
-| `cvwriter.service` | The app, as user `cvwriter`, on localhost behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton; `Restart=on-failure` |
+| `cvwriter.socket` | The unix socket `/run/cvwriter.sock`, owned by `cvwriter`, group `www-data`, mode 0660: only nginx's user can open it, and there is no TCP port | — | — |
+| `cvwriter.service` | The app, as user `cvwriter`, on the socket from `cvwriter.socket`, behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton; `Restart=on-failure` |
 | `cvwriter-migrate.service` | Oneshot, `cvwriter migrate`, as `cvwriter_owner` | `db-owner-password` | Started only by deploy |
 | `cvwriter-backup.service` + `.timer` | Oneshot, nightly; monthly it also runs the restore test | `backups-key`, `files-key` (read for the fingerprint check), `db-owner-password`, `age-key` | `Nice=`, `IOSchedulingClass=idle` |
 
-Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `IPAddressDeny=169.254.169.254`. nginx reaches only the app unit.
+Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `IPAddressDeny=169.254.169.254`. nginx reaches only the app unit. A test checks the socket's owner, group and mode.
 
 ### One-time setup
 1. As the database superuser: create roles `cvwriter_owner` (LOGIN, owns database `cvwriter`) and `cvwriter` (LOGIN, CONNECT only). Neither is a superuser (ADR-002).
-2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004).
+2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004). Neither key may delete object versions. The walking skeleton checks whether Spaces can grant that; if not, the fallback is chosen then and recorded here.
 3. Create an `age` key pair. Install the private key and every other credential as root-only files (mode 0400) referenced by the units.
 4. The owner keeps an offline copy of the master key and the `age` private key, never in a bucket or in git, and decrypts one dump with that copy to prove it works.
 5. The subdomain (ADR-005): a proxied DNS record at Cloudflare, an nginx server block with a certificate, and `proxy_set_header X-Real-IP $remote_addr`. The old path on the shared site redirects to the subdomain, with or without a trailing slash, keeping the rest of the path: `302` until the subdomain is verified, then `301`.
+6. Before go-live, on the shared server: no service runs as an account that can use sudo, and every account with full sudo is a named admin account in use. A log shipper sends SSH sign-ins and sudo events to Grafana Cloud.
 
 ### Deploy order (every merge to `main`)
 1. CI builds the binary (SPA embedded, `CGO_ENABLED=0`, linux/amd64) and fetches `typst` by pinned version and SHA-256.
@@ -151,14 +153,14 @@ Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `Protect
   - Encryption protects the dumps if the bucket or its key leaks. The private key is a server credential (for the restore test), and the owner's offline copy means a lost server doesn't lose the backups.
   - Every object in `cvwriter-files` is checked against the SHA-256 and size stored in `cv_versions` and `reference_cvs`.
   - Success writes a metric. An alert fires when no success has happened in 26 hours, or on any mismatch.
-- **Retention:** dumps are kept 90 days. Files rely on versioning, and older versions are kept (ADR-004).
+- **Retention:** dumps are kept 90 days, removed by a lifecycle rule on the bucket, not by the server's key (which can't delete). Files rely on versioning, and older versions are kept (ADR-004).
 - **Restore test, monthly and automated:** the latest dump is decrypted, restored into a scratch database, and its row counts are compared with production; then the scratch database is dropped. A failure alerts.
 - **Accepted risk:** files and backups share one provider and one account (ADR-004).
 
 ### Telemetry
 - Traces and metrics go over OTLP to Grafana Cloud. Browser spans are relayed through `/api/telemetry`, which requires sign-in and has size and rate limits (ADR-003).
 - An uptime probe hits `/api/health`.
-- Alerts: the uptime probe, the backup's last success, the restore test, Claude spend at the user's alert level, and the nightly fingerprint check.
+- Alerts: the uptime probe, the backup's last success, the restore test, Claude spend at the user's alert level, the nightly fingerprint check, and an SSH sign-in or sudo use by an account other than the admin account.
 - The walking skeleton checks that a CV job's SSE stream survives Cloudflare's 100-second idle limit (progress events keep it busy).
 
 ## Scale path
