@@ -51,7 +51,12 @@ Option 1:
   - The CV call is streamed, so the screen can show progress.
   - Timeouts follow the PRD budgets: 30 s for analysis, 90 s for a CV including the PDF.
   - Server-side refusal fallback is on (`fallbacks: "default"`). A refusal that still stops the call is shown as an error, and nothing is saved.
-- **Every call writes one usage row:** what it was for, the model that actually answered, input / output / cached token counts, the price at the time of the call, the cost, how long it took and whether it succeeded. Before each call the app checks the month's spend against the $50 stop.
+- **Every call writes one usage row:** what it was for, the model that actually answered, input / output / cached token counts, the price at the time of the call, the cost, how long it took and whether it succeeded. Before each call the app checks the month's spend against the $50 stop. The Usage view shows which model answered each call, so a reply from the fallback model is visible.
+- **Changing the model, effort or prompt:**
+  - The test set is the last 10 real ads whose CVs were kept (not flagged "Not good").
+  - Before a change goes live, those ads are run through it, and the new problem #1, 2-page check and ATS keyword check are compared with the kept versions.
+  - The test set is stored privately on the server, never in git, because the ads are real.
+  - Invented test ads are not used: they wouldn't look like the ads actually pasted.
 
 ## Consequences
 + A leaked database dump or backup doesn't leak the key.
@@ -65,4 +70,7 @@ Option 1:
 - A second user is added: look at a managed key service instead of a local file.
 - The server reaches systemd 250 or later, or has a TPM: switch to `LoadCredentialEncrypted=`.
 - The average cost per CV goes over $0.25 for two weeks in a row (PRD measure): look at the effort level or the model.
-- Opus 5.5 gets a retirement date.
+- Opus 5.5 gets a retirement date: choose the replacement using the test set.
+- In a week, more than 5% of analyses take over 30 s, or more than 5% of CVs take over 90 s (PRD speed budgets): look at the effort level or the model.
+- More than 5% of a month's calls are answered by the fallback model: look at why requests are being declined.
+- More than 20% of a month's CVs are flagged "Not good" (PRD measure): look at the prompt, the effort level or the model, checking each change with the test set.
