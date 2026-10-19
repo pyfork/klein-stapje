@@ -65,7 +65,7 @@ Trust boundaries (TB-n) are defined in `specs/threat-model.md`.
 
 ```mermaid
 flowchart LR
-    owner([Job seeker<br/>browser]) -->|HTTPS · TB-1| cdn[Cloudflare proxy<br/>caches JS/CSS only]
+    owner([Job seeker<br/>browser]) -->|HTTPS · TB-1| cdn[Cloudflare proxy + Access<br/>email code, passkey<br/>caches JS/CSS only]
     cdn -->|HTTPS| system[cvwriter<br/>own subdomain]
     owner -->|HTTPS, 60 s signed link · TB-3| spaces[(DigitalOcean Spaces<br/>private buckets)]
     system -->|HTTPS · TB-2<br/>ad text out, model output in| claude[Claude API]
@@ -77,7 +77,7 @@ flowchart LR
 ## Container diagram
 ```mermaid
 flowchart LR
-    spa[Single-page app<br/>React 19 + TS, Vite<br/>ADR-003] -->|HTTPS/JSON + SSE, session cookie| nginx[nginx<br/>own server block<br/>ADR-005]
+    spa[Single-page app<br/>React 19 + TS, Vite<br/>ADR-003] -->|HTTPS/JSON + SSE, session cookie,<br/>via Cloudflare Access| nginx[nginx<br/>own server block,<br/>Cloudflare ranges only<br/>ADR-005]
     nginx -->|HTTP over a unix socket, X-Real-IP| app[cvwriter binary<br/>Go 1.27 + chi<br/>embeds the SPA<br/>ADR-003, ADR-004]
     app -->|SQL as cvwriter| db[(PostgreSQL 18<br/>ADR-002)]
     app -->|exec, deadline| typst[typst, pinned<br/>PDF render<br/>ADR-003]
@@ -96,6 +96,8 @@ flowchart LR
 - **typst** runs as a child process of the job, in a fresh temporary folder, with its own deadline.
 
 ## Sign-in
+- **In front: Cloudflare Access** on the whole subdomain. Policy: Allow, Include, Emails = the owner's address (never "Login Methods", which lets anyone in). Login method: One-time PIN only. Independent MFA: Biometrics (Touch ID on the owner's laptop). Session: 24 h. A second Access app for `/api/health` only, with a Bypass policy, keeps the uptime probe working; it returns no data.
+- **Origin check:** the nginx server block accepts only Cloudflare's address ranges (the server's existing Cloudflare-only rule). The app checks `Cf-Access-Jwt-Assertion` on every request except `/api/health`: RS256 against the team's published keys (fetched and cached; they rotate), `iss` = the team domain, `aud` = the Access app's AUD tag, `exp`, and the `email` claim equal to the account's email. Anything else gets 401. The team domain and AUD tag are config, not secrets. Library: `coreos/go-oidc`.
 - **Cookie:** `__Host-session`; HttpOnly, Secure, SameSite=Strict, Path=/. It holds the session token; the database holds only its hash. Signing in always issues a new token.
 - **Requests:** the API accepts only JSON bodies, and checks `Origin` on every request that changes data.
 - **Passwords:** argon2id at OWASP's recommended settings, at most 2 hashes computed at a time. An unknown email gets the same error and the same delay as a wrong password, because a dummy hash is checked.
@@ -136,8 +138,9 @@ Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `Protect
 2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004). Neither key may delete object versions. The walking skeleton checks whether Spaces can grant that; if not, the fallback is chosen then and recorded here.
 3. Create an `age` key pair. Install the private key and every other credential as root-only files (mode 0400) referenced by the units.
 4. The owner keeps an offline copy of the master key and the `age` private key, never in a bucket or in git, and decrypts one dump with that copy to prove it works.
-5. The subdomain (ADR-005): a proxied DNS record at Cloudflare, an nginx server block with a certificate, and `proxy_set_header X-Real-IP $remote_addr`. The old path on the shared site redirects to the subdomain, with or without a trailing slash, keeping the rest of the path: `302` until the subdomain is verified, then `301`.
+5. The subdomain (ADR-005): a proxied DNS record at Cloudflare, an nginx server block with a certificate, and `proxy_set_header X-Real-IP $remote_addr`. The old path on the shared site redirects to the subdomain, with or without a trailing slash, keeping the rest of the path: `302` until the subdomain is verified, then `301`. The Access apps (step 7) exist before the DNS record does.
 6. Before go-live, on the shared server: no service runs as an account that can use sudo, and every account with full sudo is a named admin account in use. A log shipper sends SSH sign-ins and sudo events to Grafana Cloud.
+7. Cloudflare Access (Sign-in): turn on Zero Trust on the free plan and check that independent MFA is offered there (if not, sign in through a GitHub account protected by a passkey instead, and record that here). Add the One-time PIN identity provider; allow Biometrics only, not applied to all apps; enrol the laptop's Touch ID; create both Access apps; put the AUD tag in the app's config. The Cloudflare account itself has its own second factor.
 
 ### Deploy order (every merge to `main`)
 1. CI builds the binary (SPA embedded, `CGO_ENABLED=0`, linux/amd64) and fetches `typst` by pinned version and SHA-256.

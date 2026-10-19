@@ -1,7 +1,7 @@
 # Threat model: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-THREAT-MODEL.md.
-     Status: draft. Accepted threats decided: A-1 to A-4. Awaiting: A-5 to A-7. -->
+     Status: draft. Accepted threats decided: A-1 to A-5. Awaiting: A-6, A-7. -->
 
 Last updated: 2026-10-19, first draft
 
@@ -20,7 +20,7 @@ Last updated: 2026-10-19, first draft
 ## Trust boundaries
 | # | Boundary | From | To | What crosses it |
 |---|---|---|---|---|
-| TB-1 | Browser to app (through Cloudflare and nginx) | Anyone on the internet; then the signed-in user | The app | Sign-in, pasted ads, uploads, settings, the session cookie, SSE progress, browser spans |
+| TB-1 | Browser to app (through Cloudflare Access and nginx) | Anyone on the internet; then the signed-in user | The app | The Access sign-in (email code, passkey) and its signed token; sign-in, pasted ads, uploads, settings, the session cookie, SSE progress, browser spans |
 | TB-2 | App to Claude API | The app | Anthropic | Ad text and reference CV text out; model output in (untrusted) |
 | TB-3 | App and browser to Spaces | The app (keys); the browser (signed links) | DigitalOcean | PDFs, uploaded files, encrypted dumps; signed download links |
 | TB-4 | App and server to the telemetry backend | The app; the server's log shipper | Grafana Cloud | Route patterns, timings and counts; the server's SSH sign-in and sudo events; no personal data |
@@ -37,7 +37,7 @@ Last updated: 2026-10-19, first draft
 ### 1. Sign-in and the session
 | # | Threat | STRIDE | Answer | Where |
 |---|---|---|---|---|
-| T-1 | Password guessing or credential stuffing | Spoofing | Rule: growing delays per account and per client IP, never a lock; argon2id | Architecture, Sign-in; throttle test |
+| T-1 | Password guessing or credential stuffing | Spoofing | Rule: the sign-in form sits behind Access (T-39); growing delays per account and per client IP, never a lock; argon2id | Architecture, Sign-in; throttle test |
 | T-2 | A stolen database or backup is used to sign in | Spoofing | Rule: only token hashes and argon2id hashes are stored | Architecture, Sign-in; schema test |
 | T-3 | Session fixation, or a cookie planted by a sibling site | Tampering | Rule: a new token at every sign-in; `__Host-` cookie on its own subdomain | ADR-005; cookie test |
 | T-4 | A request forged from another site uses the cookie | Tampering | Rule: SameSite=Strict, JSON-only API, `Origin` checked on every change | Architecture, Sign-in; CSRF test |
@@ -45,6 +45,8 @@ Last updated: 2026-10-19, first draft
 | T-6 | A sign-in reply reveals whether an email has an account | Information disclosure | Test: the same error and timing for an unknown email | Sign-in test |
 | T-7 | A login flood exhausts the shared server's memory | Denial of service | Rule: at most 2 password hashes at a time; nginx and app rate limits; `MemoryMax=` | Architecture, Sign-in and Server units |
 | T-8 | An unattended signed-in browser changes the password or key | Elevation of privilege | Rule: the current password for both; a new password ends other sessions | Architecture, Sign-in; settings test |
+| T-39 | A stolen or guessed password alone signs in | Spoofing | Rule: Cloudflare Access in front of the whole subdomain: an email code sent only to the owner's address, then a passkey (Touch ID on the owner's laptop) | Architecture, Sign-in and One-time setup |
+| T-40 | A request sent straight to the server, not through Cloudflare, skips Access | Spoofing | Rule: the server block accepts only Cloudflare's address ranges, and the app checks Access's signed token on every request except `/api/health` (signature, issuer, audience, expiry, and the email equal to the account's) | Architecture, Sign-in; token test |
 
 ### 2. Entering and using the Claude API key
 | # | Threat | STRIDE | Answer | Where |
@@ -97,7 +99,7 @@ Last updated: 2026-10-19, first draft
 - **A-2** (T-30): files and every backup sit with one provider, in one account. Accepted (the owner's choice). Revisit when the first CVs are sent to employers, or on a Spaces incident.
 - **A-3** (T-34): cvwriter shares a server with other sites, and stays there (the owner's decision). Root on that server reaches cvwriter's data and keys, and nothing on the server can stop it. Accepted, with conditions that narrow the ways to root (T-34), limit what root can take or destroy (T-15's spend limit on the key, T-37) and make a compromise visible off the server (T-38). Revisit when free memory at peak drops under 500 MB, another tenant is affected, or a second user joins.
 - **A-4** (T-17): prompt injection can still bend a CV's wording. Accepted (the owner's decision), because the model has no tools, its output is checked, and the user reads every CV before sending it. Revisit if the model is ever given tools or a CV is sent without review.
-- **A-5**: no second factor at sign-in. Accepted for one user, with a long random password. Revisit when a second user joins (passkeys).
+- **A-5** (T-39): one second-factor device. Sign-in needs an email code and a passkey through Access (T-39, T-40), then the app's password, but only one passkey is enrolled, so a lost laptop means a reset in the Cloudflare dashboard (runbook below). The email code alone can be phished; the passkey can't. Accepted (the owner's decision): a backup passkey is deferred. Revisit when a second device is at hand (enrol it), or a second user joins (passkeys in the app).
 - **A-6** (T-5): no audit log of who changed what. Accepted, because there is one user and the history that matters is insert-only. Revisit when a second user joins.
 - **A-7** (T-21): ad and reference CV text are sent to the model provider under the user's own key and that provider's data terms. Accepted, because the product needs it. Revisit if the provider's data retention terms change.
 
@@ -119,6 +121,11 @@ Last updated: 2026-10-19, first draft
 4. Revoke and replace the Claude key, both storage keys, the database passwords and the backup encryption key.
 5. Restore onto a clean server from the latest dump if needed, using the offline key copy.
 6. Delete every session, so everyone signs in again.
+
+**Locked out of Access, or the laptop is lost**
+1. In the Cloudflare dashboard, delete the lost passkey under the user's MFA devices.
+2. Sign in to the Access App Launcher with an email code and register a passkey on the device in hand.
+3. If the laptop was lost: remove its SSH key from the server (through the hosting provider's web console if needed), set a new app password with `cvwriter set-password`, and delete every session.
 
 **A backup fails, or the restore test fails**
 1. The alert names the step. Run the backup job by hand and read its log.
