@@ -57,6 +57,11 @@ Option 1:
     - C: ad content
     - D: the raw ad
   - A GIN index on that column.
+  - **Exact keyword terms:** the full-text parser splits or drops symbols, so "C++" becomes "c" and "C#" becomes "c" under any text-search configuration.
+    - A `keyword_terms` column (`text[]`, `GENERATED ALWAYS AS (...) STORED`) holds every keyword (top and secondary) exactly as worded, lowercased. It is built by a small `IMMUTABLE` SQL function over the analysis.
+    - It has its own GIN index.
+    - A search that equals a keyword term matches that list first and ranks above full-text matches.
+    - A test searches "C++", "C#", "S/4HANA" and "IFRS 17" and expects the exact ad.
   - Feature 2 adds `pg_trgm` GIN indexes on title, company and label, so partial words match as you type.
 - **CV versions and usage rows are insert-only, with two guards:**
   - The app role `cvwriter` is granted only `SELECT` and `INSERT` on `cv_versions` and `claude_calls`.
