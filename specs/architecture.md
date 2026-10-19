@@ -10,7 +10,7 @@ Last updated: 2026-10-19, first draft (depends on ADR-003, ADR-004 and ADR-005)
 ### Entities and invariants
 | Entity | Owns | Invariants (what must always be true) | ADR |
 |---|---|---|---|
-| User (`users`) | Email, password hash, timezone, spend alert and stop | One row for now; every other row belongs to exactly one user. The password hash is argon2id. Timezone and spend limits are per user; new users get the defaults from the environment. | ADR-002 |
+| User (`users`) | Email, password hash, timezone, spend alert and stop, the CV contact block | One row for now; every other row belongs to exactly one user. The password hash is argon2id. Timezone and spend limits are per user; new users get the defaults from the environment. The contact block (name, phone, email, address, links) is edited in Settings, never sent to Claude, and added to the CV by the Typst template at render. | ADR-002 |
 | Session (`sessions`) | Who is signed in | Only the SHA-256 of a random 32-byte token is stored. A session ends 14 days after last use, 30 days after creation, on sign-out, or when the password changes. Last use is written at most once an hour. | — |
 | Security event (`security_events`) | Who changed what, for incidents | Insert-only (grants plus a trigger). `kind` is `signed_in`, `sign_in_failed`, `signed_out`, `password_changed`, `api_key_changed` or `sessions_ended`, with the time, the session's id and the client IP; a key change records only the last 4 characters. Failed sign-ins are recorded only for an existing account (unknown emails stay in `login_attempts`). Never a password, key or token. The client IP is cleared after 90 days. | ADR-002 |
 | Login attempt (`login_attempts`) | Recent failed sign-ins | Counted per account and per client IP; each failure lengthens the wait before the next try. An account is never locked. Rows older than 24 hours are deleted, so client IPs aren't kept. | — |
@@ -115,7 +115,7 @@ Go modules live under `internal/<module>/`; others import only `internal/<module
 | `ads` | `ads` | `Create`, `Get`, `List`, `Search` |
 | `cvs` | `cv_jobs`, `cv_versions`, `cv_events`, `reference_cvs` | `StartJob`, `JobEvents`, `ListVersions`, `Flag`, `Unflag`, `DownloadLink`, `ReferenceText` |
 | `usage` | `claude_calls` | `Record`, `MonthSpend`, `Summary` |
-| `claude` | no tables | `Analyse`, `WriteCV` (streamed); the only importer of the Anthropic SDK; checks spend through `usage` before each call |
+| `claude` | no tables | `Analyse`, `WriteCV` (streamed); the only importer of the Anthropic SDK; checks spend through `usage` before each call; replaces any contact-block value found in the text with a placeholder before sending (a test checks no contact value reaches a prompt) |
 | `pdf` | no tables | `Render(cvJSON, design) → PDF, pages, text`; the only module that runs `typst` |
 | `storage` | objects in both buckets | `PutNew`, `SignGet`, `Verify`; no overwrite or delete exists |
 | `status` (Feature 2) | `application_events` | `Record`, `Current`, `InterviewRate` |

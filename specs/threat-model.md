@@ -1,9 +1,9 @@
 # Threat model: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-THREAT-MODEL.md.
-     Status: draft. Accepted threats decided: A-1 to A-6. Awaiting: A-7. -->
+     Status: every accepted threat decided (A-1 to A-7); ready for review. -->
 
-Last updated: 2026-10-19, first draft
+Last updated: 2026-10-19, accepted threats decided
 
 ## Assets
 | Asset | Who may read it | Who may change it |
@@ -67,7 +67,7 @@ Last updated: 2026-10-19, first draft
 | T-18 | Model output carries markup or code into the PDF | Tampering | Rule: Typst places strings as text, `eval` banned (CI check); no network, root-only file access | ADR-003; golden-file test |
 | T-19 | Model output carries script into the app's pages | Tampering | Rule: React escapes by default; no raw HTML from model output; CSP `script-src 'self'` | ADR-003, ADR-004; lint rule |
 | T-20 | Which model wrote a CV can't be shown | Repudiation | Rule: the answering model is stored per call and shown in Usage | ADR-001 |
-| T-21 | Ad and CV text leave for the model provider | Information disclosure | Accepted, see A-7 | — |
+| T-21 | Ad and CV text leave for the model provider | Information disclosure | Rule: the contact block (name, phone, email, address, links) lives in Settings and is never sent; any of its values found in a reference CV is replaced with a placeholder before the call; Typst adds the block at render. Residual accepted, see A-7 | Architecture, Domain model and Module boundaries; prompt test |
 | T-22 | Ad or CV text lands in logs or spans | Information disclosure | Test: the log test; spans hold route patterns only | ADR-003 |
 | T-23 | Huge pastes or repeated Generates exhaust memory or money | Denial of service | Rule: a size limit on pastes; one job per ad at a time; render deadline and `MemoryMax=`; spend stop | Architecture; job test |
 | T-24 | A crafted ad makes the renderer read files or reach the network | Elevation of privilege | Rule: Typst runs with a fresh temporary root, no network access, system fonts ignored | ADR-003 |
@@ -101,7 +101,7 @@ Last updated: 2026-10-19, first draft
 - **A-4** (T-17): prompt injection can still bend a CV's wording. Accepted (the owner's decision), because the model has no tools, its output is checked, and the user reads every CV before sending it. Revisit if the model is ever given tools or a CV is sent without review.
 - **A-5** (T-39): one second-factor device. Sign-in needs an email code and a passkey through Access (T-39, T-40), then the app's password, but only one passkey is enrolled, so a lost laptop means a reset in the Cloudflare dashboard (runbook below). The email code alone can be phished; the passkey can't. Accepted (the owner's decision): a backup passkey is deferred. Revisit when a second device is at hand (enrol it), or a second user joins (passkeys in the app).
 - **A-6** (T-5): the in-app event log lives in the same database, so root on the server could alter it. Accepted (the owner's decision), because the Access sign-in log and the SSH and sudo log (T-38) are kept off the server. Revisit when a second user joins: ship security events off the server too.
-- **A-7** (T-21): ad and reference CV text are sent to the model provider under the user's own key and that provider's data terms. Accepted, because the product needs it. Revisit if the provider's data retention terms change.
+- **A-7** (T-21): ad and reference CV text, without the contact block, are sent to the model provider under the user's own key and that provider's commercial terms (no training on API content; deleted within 30 days by default). Accepted (the owner's decision), because the product needs it. Revisit if the provider's training or retention terms change.
 
 ## Runbooks
 **A Claude API key leaks**
