@@ -1,0 +1,72 @@
+# guard-builder-Opus5.5-agent
+# Guard 3: test lock (AC-9 to AC-12). On every PR change, compares each
+# locked check in the PR against its fingerprint in the lock file on main,
+# and publishes the `test-lock` check signed by the reviewer app.
+#
+# pull_request_target: this file, the script, the plans and the locks all
+# come from main, so a PR can't loosen its own lock. PR files are only
+# fingerprinted, never run.
+name: test-lock
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+concurrency:
+  group: test-lock-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  test-lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: reviewer
+    permissions:
+      contents: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Check out the PR into pr-head/
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: pr-head
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Compare locked checks with main's fingerprints
+        id: lock
+        run: |
+          if bash .github/scripts/test-lock.sh . pr-head > result.txt 2>&1; then
+            echo "conclusion=success" >> "$GITHUB_OUTPUT"
+          else
+            echo "conclusion=failure" >> "$GITHUB_OUTPUT"
+          fi
+          cat result.txt
+
+      - name: Sign in as the reviewer app
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.REVIEWER_APP_CLIENT_ID }}
+          private-key: ${{ secrets.REVIEWER_APP_PRIVATE_KEY }}
+          permission-checks: write
+
+      - name: Publish the test-lock check
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.head.sha }}
+          CONCLUSION: ${{ steps.lock.outputs.conclusion || 'failure' }}
+        run: |
+          title="test-lock: PASS"; [ "$CONCLUSION" = "success" ] || title="test-lock: BLOCKED"
+          jq -n --arg sha "$SHA" --arg c "$CONCLUSION" --arg t "$title" --rawfile s result.txt \
+            '{name:"test-lock", head_sha:$sha, status:"completed", conclusion:$c, output:{title:$t, summary:$s}}' \
+            | gh api -X POST "repos/$GH_REPO/check-runs" --input - --jq '.html_url'
+          [ "$CONCLUSION" = "success" ]
