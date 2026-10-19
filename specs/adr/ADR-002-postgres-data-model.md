@@ -51,7 +51,7 @@ Option 1:
   - `CHECK` constraints back up the fields screens depend on: `analysis_schema_version > 0`; `problems` is an array of 1 to 3 items; `keywords.top` is an array of exactly 3.
   - The fields shown on lists and pills (title, company, location, work mode, pay text, years required, the top-3 keywords) are `GENERATED ALWAYS AS (...) STORED` columns built from `analysis`, so they can't drift from it. The own label comes from the paste, so it is a plain column.
 - **Search:**
-  - A `search_vector` column, `GENERATED ALWAYS AS (...) STORED`, built with `setweight(...)` over `to_tsvector` and `jsonb_to_tsvector`, all of which are allowed in generated columns. It uses the `english` text-search configuration, weighted:
+  - A `search_vector` column, `GENERATED ALWAYS AS (...) STORED`, built with `setweight(...)` over `to_tsvector` and `jsonb_to_tsvector`, all of which are allowed in generated columns. It uses the `english` text-search configuration, because the first version takes English ads only (PRD). It is weighted:
     - A: title, company and own label
     - B: keywords and problems
     - C: ad content
@@ -79,3 +79,4 @@ Option 1:
 - Search takes over 200 ms for 95% of searches, or ads pass 10,000.
 - A second user is added: add row-level security on `user_id`.
 - Three analysis schema versions are live at once: move the older ones forward with a data migration.
+- The first non-English ad is to be stored: store a language per ad and pick the text-search configuration per ad, or switch to `simple` for every ad.

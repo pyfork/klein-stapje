@@ -38,6 +38,7 @@ nothing can be looked up or reused.
 - Match section (proof per problem and keyword, gaps marked): safe because the CV prompt reads the reference CV directly; revisit when ads average more than 2 CV versions.
 - CV design 2 (Problem-first): safe because design 1 (Classic) covers the need; revisit when the 2-page and ATS checks hold for 10 CVs in a row.
 - Application status and interview rate: safe because the rate means little before about 20 applications; revisit at the start of Feature 2.
+- Ads in languages other than English: safe because the first version's ads are English, and search stems words by English rules; revisit when the first non-English ad is to be stored.
 - Sign-up for more users, billing, designs 3 and 4, mobile app: safe because there is one user; revisit when a second user is wanted.
 
 ## Smallest working version
