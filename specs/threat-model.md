@@ -1,7 +1,7 @@
 # Threat model: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-THREAT-MODEL.md.
-     Status: draft, awaiting the owner's decisions on the accepted threats. -->
+     Status: draft. Accepted threats decided: A-1, A-2. Awaiting: A-3 to A-7. -->
 
 Last updated: 2026-10-19, first draft
 
@@ -90,7 +90,7 @@ Last updated: 2026-10-19, first draft
 | T-35 | Real ads, real CVs or the private test set are committed to the public repository | Information disclosure | Rule: content rules; a pre-push check; the test set lives only on the server | Content rules |
 
 ## Accepted
-- **A-1** (T-14): the master key and the database share one server, so root access reads both; the encryption protects dumps and backups only. Accepted, because there is one server and one user. Revisit when there are two app servers or a second user: move the master key to a key service.
+- **A-1** (T-14): the master key and the database share one server, so root access reads both; the encryption protects dumps and backups only. Accepted (the owner's decision), because there is one server and one user. A cloud key service was considered and deferred: the server has no cloud identity, so it would hold that service's credential too, and root could still decrypt through it; it adds logging and revocation, not prevention. Revisit when there are two app servers or a second user: move the master key to a key service.
 - **A-2** (T-30): files and every backup sit with one provider, in one account. Accepted (the owner's choice). Revisit when the first CVs are sent to employers, or on a Spaces incident.
 - **A-3** (T-34): cvwriter shares a server with other sites; a root compromise there reaches everything. Accepted, because of the hosting choice in the brief. Revisit when free memory at peak drops under 500 MB, another tenant is affected, or a second user joins.
 - **A-4** (T-17): prompt injection can still bend a CV's wording. Accepted, because the model has no tools, its output is checked, and the user reads every CV before sending it. Revisit if the model is ever given tools or a CV is sent without review.
