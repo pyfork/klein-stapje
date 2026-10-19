@@ -1,7 +1,7 @@
 # Threat model: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-THREAT-MODEL.md.
-     Status: draft. Accepted threats decided: A-1 to A-3. Awaiting: A-4 to A-7. -->
+     Status: draft. Accepted threats decided: A-1 to A-4. Awaiting: A-5 to A-7. -->
 
 Last updated: 2026-10-19, first draft
 
@@ -96,7 +96,7 @@ Last updated: 2026-10-19, first draft
 - **A-1** (T-14): the master key and the database share one server, so root access reads both; the encryption protects dumps and backups only. Accepted (the owner's decision), because there is one server and one user. A cloud key service was considered and deferred: the server has no cloud identity, so it would hold that service's credential too, and root could still decrypt through it; it adds logging and revocation, not prevention. Revisit when there are two app servers or a second user: move the master key to a key service.
 - **A-2** (T-30): files and every backup sit with one provider, in one account. Accepted (the owner's choice). Revisit when the first CVs are sent to employers, or on a Spaces incident.
 - **A-3** (T-34): cvwriter shares a server with other sites, and stays there (the owner's decision). Root on that server reaches cvwriter's data and keys, and nothing on the server can stop it. Accepted, with conditions that narrow the ways to root (T-34), limit what root can take or destroy (T-15's spend limit on the key, T-37) and make a compromise visible off the server (T-38). Revisit when free memory at peak drops under 500 MB, another tenant is affected, or a second user joins.
-- **A-4** (T-17): prompt injection can still bend a CV's wording. Accepted, because the model has no tools, its output is checked, and the user reads every CV before sending it. Revisit if the model is ever given tools or a CV is sent without review.
+- **A-4** (T-17): prompt injection can still bend a CV's wording. Accepted (the owner's decision), because the model has no tools, its output is checked, and the user reads every CV before sending it. Revisit if the model is ever given tools or a CV is sent without review.
 - **A-5**: no second factor at sign-in. Accepted for one user, with a long random password. Revisit when a second user joins (passkeys).
 - **A-6** (T-5): no audit log of who changed what. Accepted, because there is one user and the history that matters is insert-only. Revisit when a second user joins.
 - **A-7** (T-21): ad and reference CV text are sent to the model provider under the user's own key and that provider's data terms. Accepted, because the product needs it. Revisit if the provider's data retention terms change.
