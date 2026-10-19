@@ -1,0 +1,49 @@
+# guard-builder-Opus5.5-agent
+# Guard 4: daily sweep (AC-13 to AC-19). Once a day, posts one plain-words
+# report as an issue labelled daily-sweep. GitHub notifies the owner.
+# Runs from main only (schedule and manual runs both use main's copy).
+name: daily-sweep
+
+on:
+  schedule:
+    - cron: "0 0 * * *" # report time, UTC
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "Look back from this time (ISO, e.g. 2026-09-28T10:00:00Z). Empty = last 24 hours"
+        required: false
+        default: ""
+
+permissions: {}
+
+jobs:
+  daily-sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      checks: read
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Write the report
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          SINCE: ${{ inputs.since }}
+          REVIEWER_APP_ID: ${{ vars.REVIEWER_APP_ID }}
+        run: bash .github/scripts/daily-sweep.sh > report.md && cat report.md
+
+      - name: Post it as today's issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh label create daily-sweep --color 0E8A16 --description "Guard 4 daily report" 2>/dev/null || true
+          gh label create waiting-on-owner --color D93F0B --description "A question waiting on the owner" 2>/dev/null || true
+          gh issue create --title "Daily sweep $(date -u +%Y-%m-%d)" --label daily-sweep --body-file report.md

@@ -1,0 +1,50 @@
+# guard-builder-Sonnet5-agent
+# Guard 1B, part 3: catches any change to main that did not arrive
+# through a merged pull request. Runs on every push to main.
+name: main-tripwire
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  tripwire:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check whether this push came from a merged PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const sha = context.sha;
+            // Any merge style counts (merge commit, squash, rebase): the
+            // commit must belong to a merged PR.
+            const prs = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              commit_sha: sha,
+            });
+            const associatedPR = prs.data.find(p => p.merged_at);
+
+            if (associatedPR) {
+              return; // arrived via a normal PR merge; nothing to report
+            }
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `guard-breach: direct change to main at ${sha.slice(0, 7)}`,
+              labels: ['guard-breach'],
+              body: [
+                `A change landed on \`main\` without going through a merged pull request.`,
+                ``,
+                `- Commit: ${sha}`,
+                `- Pushed by: ${context.actor}`,
+                `- When: ${new Date().toISOString()}`,
+                ``,
+                `This does not undo the change. It is a record for the owner to review.`,
+              ].join('\n'),
+            });
