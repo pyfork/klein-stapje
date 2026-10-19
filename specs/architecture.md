@@ -10,8 +10,9 @@ Last updated: 2026-10-19, first draft (depends on ADR-003, ADR-004 and ADR-005)
 ### Entities and invariants
 | Entity | Owns | Invariants (what must always be true) | ADR |
 |---|---|---|---|
-| User (`users`) | Email, password hash, timezone, spend alert and stop | One row for now; every other row belongs to exactly one user. The password hash is argon2id. Timezone and spend limits are per user; new users get the defaults from the environment. | ADR-002 |
+| User (`users`) | Email, password hash, timezone, spend alert and stop, the CV contact block | One row for now; every other row belongs to exactly one user. The password hash is argon2id. Timezone and spend limits are per user; new users get the defaults from the environment. The contact block (name, phone, email, address, links) is edited in Settings, never sent to Claude, and added to the CV by the Typst template at render. | ADR-002 |
 | Session (`sessions`) | Who is signed in | Only the SHA-256 of a random 32-byte token is stored. A session ends 14 days after last use, 30 days after creation, on sign-out, or when the password changes. Last use is written at most once an hour. | — |
+| Security event (`security_events`) | Who changed what, for incidents | Insert-only (grants plus a trigger). `kind` is `signed_in`, `sign_in_failed`, `signed_out`, `password_changed`, `api_key_changed` or `sessions_ended`, with the time, the session's id and the client IP; a key change records only the last 4 characters. Failed sign-ins are recorded only for an existing account (unknown emails stay in `login_attempts`). Never a password, key or token. The client IP is cleared after 90 days. | ADR-002 |
 | Login attempt (`login_attempts`) | Recent failed sign-ins | Counted per account and per client IP; each failure lengthens the wait before the next try. An account is never locked. Rows older than 24 hours are deleted, so client IPs aren't kept. | — |
 | API key (`api_keys`) | The user's Claude key, encrypted | At most one per user. AES-256-GCM with `user_id` as associated data and a `key_version`; only the last 4 characters are ever shown; stored only after a test call succeeds. Changing it needs the current password. | ADR-001 |
 | Ad (`ads`) | The pasted ad and its analysis | `raw_ad` never changes. An ad is stored only with an analysis that passed its schema check; a failed analysis stores no ad. The list columns, `search_vector` and `keyword_terms` are generated from `analysis`. | ADR-002 |
@@ -23,7 +24,7 @@ Last updated: 2026-10-19, first draft (depends on ADR-003, ADR-004 and ADR-005)
 | Application event (`application_events`), Feature 2 | Where each application stands | Insert-only; an ad's status is its latest event. | — |
 
 ### Relationships
-- A user has many sessions, login attempts, ads, reference CVs and Claude calls, and at most one API key.
+- A user has many sessions, security events, login attempts, ads, reference CVs and Claude calls, and at most one API key.
 - An ad has many CV jobs and many CV versions. A done CV job has exactly one CV version; a CV version comes from exactly one job.
 - A CV version has many CV events.
 - An ad references the Claude call that analysed it; a CV version references the Claude call that wrote it. A failed call belongs to neither.
@@ -65,7 +66,7 @@ Trust boundaries (TB-n) are defined in `specs/threat-model.md`.
 
 ```mermaid
 flowchart LR
-    owner([Job seeker<br/>browser]) -->|HTTPS · TB-1| cdn[Cloudflare proxy<br/>caches JS/CSS only]
+    owner([Job seeker<br/>browser]) -->|HTTPS · TB-1| cdn[Cloudflare proxy + Access<br/>email code, passkey<br/>caches JS/CSS only]
     cdn -->|HTTPS| system[cvwriter<br/>own subdomain]
     owner -->|HTTPS, 60 s signed link · TB-3| spaces[(DigitalOcean Spaces<br/>private buckets)]
     system -->|HTTPS · TB-2<br/>ad text out, model output in| claude[Claude API]
@@ -77,8 +78,8 @@ flowchart LR
 ## Container diagram
 ```mermaid
 flowchart LR
-    spa[Single-page app<br/>React 19 + TS, Vite<br/>ADR-003] -->|HTTPS/JSON + SSE, session cookie| nginx[nginx<br/>own server block<br/>ADR-005]
-    nginx -->|HTTP, localhost, X-Real-IP| app[cvwriter binary<br/>Go 1.27 + chi<br/>embeds the SPA<br/>ADR-003, ADR-004]
+    spa[Single-page app<br/>React 19 + TS, Vite<br/>ADR-003] -->|HTTPS/JSON + SSE, session cookie,<br/>via Cloudflare Access| nginx[nginx<br/>own server block,<br/>Cloudflare ranges only<br/>ADR-005]
+    nginx -->|HTTP over a unix socket, X-Real-IP| app[cvwriter binary<br/>Go 1.27 + chi<br/>embeds the SPA<br/>ADR-003, ADR-004]
     app -->|SQL as cvwriter| db[(PostgreSQL 18<br/>ADR-002)]
     app -->|exec, deadline| typst[typst, pinned<br/>PDF render<br/>ADR-003]
     app -->|S3 API, files key| files[(cvwriter-files<br/>ADR-004)]
@@ -96,6 +97,8 @@ flowchart LR
 - **typst** runs as a child process of the job, in a fresh temporary folder, with its own deadline.
 
 ## Sign-in
+- **In front: Cloudflare Access** on the whole subdomain. Policy: Allow, Include, Emails = the owner's address (never "Login Methods", which lets anyone in). Login method: One-time PIN only. Independent MFA: Biometrics (Touch ID on the owner's laptop). Session: 24 h. A second Access app for `/api/health` only, with a Bypass policy, keeps the uptime probe working; it returns no data.
+- **Origin check:** the nginx server block accepts only Cloudflare's address ranges (the server's existing Cloudflare-only rule). The app checks `Cf-Access-Jwt-Assertion` on every request except `/api/health`: RS256 against the team's published keys (fetched and cached; they rotate), `iss` = the team domain, `aud` = the Access app's AUD tag, `exp`, and the `email` claim equal to the account's email. Anything else gets 401. The team domain and AUD tag are config, not secrets. Library: `coreos/go-oidc`.
 - **Cookie:** `__Host-session`; HttpOnly, Secure, SameSite=Strict, Path=/. It holds the session token; the database holds only its hash. Signing in always issues a new token.
 - **Requests:** the API accepts only JSON bodies, and checks `Origin` on every request that changes data.
 - **Passwords:** argon2id at OWASP's recommended settings, at most 2 hashes computed at a time. An unknown email gets the same error and the same delay as a wrong password, because a dummy hash is checked.
@@ -108,11 +111,11 @@ Go modules live under `internal/<module>/`; others import only `internal/<module
 
 | Module | Owns | Others reach it through |
 |---|---|---|
-| `account` | `users`, `sessions`, `login_attempts`, `api_keys` | `CurrentUser(ctx)`, `Settings(ctx)`; `DecryptKey(ctx, userID)`, which only `claude` may call (depguard) |
+| `account` | `users`, `sessions`, `security_events`, `login_attempts`, `api_keys` | `CurrentUser(ctx)`, `Settings(ctx)`; `DecryptKey(ctx, userID)`, which only `claude` may call (depguard) |
 | `ads` | `ads` | `Create`, `Get`, `List`, `Search` |
 | `cvs` | `cv_jobs`, `cv_versions`, `cv_events`, `reference_cvs` | `StartJob`, `JobEvents`, `ListVersions`, `Flag`, `Unflag`, `DownloadLink`, `ReferenceText` |
 | `usage` | `claude_calls` | `Record`, `MonthSpend`, `Summary` |
-| `claude` | no tables | `Analyse`, `WriteCV` (streamed); the only importer of the Anthropic SDK; checks spend through `usage` before each call |
+| `claude` | no tables | `Analyse`, `WriteCV` (streamed); the only importer of the Anthropic SDK; checks spend through `usage` before each call; replaces any contact-block value found in the text with a placeholder before sending (a test checks no contact value reaches a prompt) |
 | `pdf` | no tables | `Render(cvJSON, design) → PDF, pages, text`; the only module that runs `typst` |
 | `storage` | objects in both buckets | `PutNew`, `SignGet`, `Verify`; no overwrite or delete exists |
 | `status` (Feature 2) | `application_events` | `Record`, `Current`, `InterviewRate` |
@@ -124,18 +127,21 @@ Every query on a user-owned table filters on `user_id`; a CI check enforces it (
 ### Server units
 | Unit | Runs | Credentials (`LoadCredential=`) | Limits |
 |---|---|---|---|
-| `cvwriter.service` | The app, as user `cvwriter`, on localhost behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton; `Restart=on-failure` |
+| `cvwriter.socket` | The unix socket `/run/cvwriter.sock`, owned by `cvwriter`, group `www-data`, mode 0660: only nginx's user can open it, and there is no TCP port | — | — |
+| `cvwriter.service` | The app, as user `cvwriter`, on the socket from `cvwriter.socket`, behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton; `Restart=on-failure` |
 | `cvwriter-migrate.service` | Oneshot, `cvwriter migrate`, as `cvwriter_owner` | `db-owner-password` | Started only by deploy |
 | `cvwriter-backup.service` + `.timer` | Oneshot, nightly; monthly it also runs the restore test | `backups-key`, `files-key` (read for the fingerprint check), `db-owner-password`, `age-key` | `Nice=`, `IOSchedulingClass=idle` |
 
-Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `IPAddressDeny=169.254.169.254`. nginx reaches only the app unit.
+Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `IPAddressDeny=169.254.169.254`. nginx reaches only the app unit. A test checks the socket's owner, group and mode.
 
 ### One-time setup
 1. As the database superuser: create roles `cvwriter_owner` (LOGIN, owns database `cvwriter`) and `cvwriter` (LOGIN, CONNECT only). Neither is a superuser (ADR-002).
-2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004).
+2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004). Neither key may delete object versions. The walking skeleton checks whether Spaces can grant that; if not, the fallback is chosen then and recorded here.
 3. Create an `age` key pair. Install the private key and every other credential as root-only files (mode 0400) referenced by the units.
 4. The owner keeps an offline copy of the master key and the `age` private key, never in a bucket or in git, and decrypts one dump with that copy to prove it works.
-5. The subdomain (ADR-005): a proxied DNS record at Cloudflare, an nginx server block with a certificate, and `proxy_set_header X-Real-IP $remote_addr`. The old path on the shared site redirects to the subdomain, with or without a trailing slash, keeping the rest of the path: `302` until the subdomain is verified, then `301`.
+5. The subdomain (ADR-005): a proxied DNS record at Cloudflare, an nginx server block with a certificate, and `proxy_set_header X-Real-IP $remote_addr`. The old path on the shared site redirects to the subdomain, with or without a trailing slash, keeping the rest of the path: `302` until the subdomain is verified, then `301`. The Access apps (step 7) exist before the DNS record does.
+6. Before go-live, on the shared server: no service runs as an account that can use sudo, and every account with full sudo is a named admin account in use. A log shipper sends SSH sign-ins and sudo events to Grafana Cloud.
+7. Cloudflare Access (Sign-in): turn on Zero Trust on the free plan and check that independent MFA is offered there (if not, sign in through a GitHub account protected by a passkey instead, and record that here). Add the One-time PIN identity provider; allow Biometrics only, not applied to all apps; enrol the laptop's Touch ID; create both Access apps; put the AUD tag in the app's config. The Cloudflare account itself has its own second factor.
 
 ### Deploy order (every merge to `main`)
 1. CI builds the binary (SPA embedded, `CGO_ENABLED=0`, linux/amd64) and fetches `typst` by pinned version and SHA-256.
@@ -151,14 +157,14 @@ Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `Protect
   - Encryption protects the dumps if the bucket or its key leaks. The private key is a server credential (for the restore test), and the owner's offline copy means a lost server doesn't lose the backups.
   - Every object in `cvwriter-files` is checked against the SHA-256 and size stored in `cv_versions` and `reference_cvs`.
   - Success writes a metric. An alert fires when no success has happened in 26 hours, or on any mismatch.
-- **Retention:** dumps are kept 90 days. Files rely on versioning, and older versions are kept (ADR-004).
+- **Retention:** dumps are kept 90 days, removed by a lifecycle rule on the bucket, not by the server's key (which can't delete). Files rely on versioning, and older versions are kept (ADR-004).
 - **Restore test, monthly and automated:** the latest dump is decrypted, restored into a scratch database, and its row counts are compared with production; then the scratch database is dropped. A failure alerts.
 - **Accepted risk:** files and backups share one provider and one account (ADR-004).
 
 ### Telemetry
 - Traces and metrics go over OTLP to Grafana Cloud. Browser spans are relayed through `/api/telemetry`, which requires sign-in and has size and rate limits (ADR-003).
 - An uptime probe hits `/api/health`.
-- Alerts: the uptime probe, the backup's last success, the restore test, Claude spend at the user's alert level, and the nightly fingerprint check.
+- Alerts: the uptime probe, the backup's last success, the restore test, Claude spend at the user's alert level, the nightly fingerprint check, and an SSH sign-in or sudo use by an account other than the admin account.
 - The walking skeleton checks that a CV job's SSE stream survives Cloudflare's 100-second idle limit (progress events keep it busy).
 
 ## Scale path
