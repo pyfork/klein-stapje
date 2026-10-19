@@ -1,0 +1,5 @@
+# guard-builder-Opus5.5-agent
+# Owner approval is required for every change (enforced by the protect-main
+# ruleset). Agent sessions run as the agent login and can't approve their
+# own PRs.
+* @pyfork
