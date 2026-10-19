@@ -30,6 +30,7 @@ nothing can be looked up or reused.
 | The PDF is ATS-readable | 100% of CVs: text pulled from the PDF holds the ad's top-3 keywords in the ad's exact wording | The same check at Generate | Every Generate; automated test |
 | Paste to downloaded CV | Median ≤ 3 min, review time included, per month | Ad created time vs first CV version time | Feature 1 done, then monthly |
 | First draft is usable | ≤ 2 versions per ad on average, per month | Versions per ad | Monthly |
+| CVs judged good | ≤ 20% of CVs flagged "Not good" per month; a CV downloaded and not flagged within 7 days counts as good | "Not good" flags (with a reason) on CV versions | Monthly |
 | Cost per CV | ≤ $0.25 average, per week | Usage view average | Weekly |
 
 ## Not in the first version
@@ -48,7 +49,8 @@ Feature 1, after the walking skeleton, runs end to end from pasting an ad to dow
 - A newest-first list of ads with a basic full-text search box.
 - One reference CV, pasted as text in Settings.
 - Create CV: review step → design 1 (Classic) → MD + PDF. Each PDF is written once and kept unchanged, and each Generate makes a new version.
-- A Usage view in Settings: spend for today, this week (starting Monday) and this month in the owner's configured timezone, plus all time; split into analyses and CVs; average cost per call; spend against the caps. Each CV version shows its own cost.
+- A "Not good" button on each CV version, with a reason (wrong main problem, wrong keywords, too long, wording, other) and an optional note.
+- A Usage view in Settings: spend for today, this week (starting Monday) and this month in the owner's configured timezone, plus all time; split into analyses and CVs; average cost per call; which model answered each call; spend against the caps. Each CV version shows its own cost.
 
 Feature 2 adds the full search screen, uploads of many reference CVs, the Match section, design 2 and application status.
 
