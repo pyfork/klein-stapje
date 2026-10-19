@@ -1,0 +1,139 @@
+# kit-keeper-Opus5.5-agent, 2026-09-28
+# Template: the scaffold copies this to the new project's root as .gitignore.
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
+
+# Secrets / local env — never commit
+.env
+*.env
+.env.*
+secrets/
+**/secrets/
+secrets.*
+credentials.*
+*_credentials*
+*.credentials.json
+config.secret.*
+.npmrc
+.netrc
+
+# Keys & certificates
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+id_rsa
+id_rsa.pub
+id_ed25519
+id_ed25519.pub
+.ssh/
+
+# Cloud logins
+# AWS
+.aws/
+# DigitalOcean (token normally lives in .env, covered above)
+.doctl/
+# Cloudflare Wrangler: local secrets + local state
+.dev.vars
+.dev.vars.*
+.wrangler/
+# Google Cloud: login folder, service-account key files
+.config/gcloud/
+application_default_credentials.json
+*service-account*.json
+*service_account*.json
+gcp-key*.json
+gcloud-key*.json
+# Terraform (any cloud): state and variable files often hold passwords in plain text
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+.terraform/
+
+# Templates are safe to commit — must stay after the rules above
+!.env.example
+!.dev.vars.example
+
+# Stack sections below: keep the ones this project uses, and add one for
+# any other stack. The kit names no stack.
+
+# Go build artifacts
+/bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+vendor/
+go.work
+go.work.sum
+*.a
+/pkg/
+/app/server
+/server
+
+# Java build artifacts (Gradle or Maven)
+target/
+.gradle/
+*.class
+*.jar
+*.war
+*.ear
+# The build wrappers' own jars must be saved, or ./gradlew or ./mvnw fails on a fresh clone
+!gradle/wrapper/gradle-wrapper.jar
+!.mvn/wrapper/maven-wrapper.jar
+
+# JS/React/TS build artifacts
+node_modules/
+.next/
+*.tsbuildinfo
+.turbo/
+.cache/
+coverage/
+.parcel-cache/
+*.log
+.eslintcache
+.vite/
+.swc/
+
+# Build output (Go, Java, JS)
+dist/
+build/
+out/
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# Folders & files
+.claude/
+CLAUDE*.md
+uploads/
+# The private kit (agent roles, rules, guides) stays on this Mac only.
+# The reviewer fetches what it needs from the private kit repo.
+# Public guard files live in docs-public/guard-data/ instead.
+docs/
+# Session handoff notes are private
+README-HANDOFF-*
