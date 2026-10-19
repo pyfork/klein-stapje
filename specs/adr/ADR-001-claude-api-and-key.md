@@ -49,7 +49,7 @@ Option 1:
 - **How calls are made:**
   - The analysis call asks for JSON that matches a schema (structured outputs). The reply is checked before it is saved.
   - The CV call is streamed, so the screen can show progress.
-  - Timeouts follow the PRD budgets: 30 s for analysis, 90 s for a CV including the PDF.
+  - Timeouts follow the PRD budgets: 30 s for analysis, 90 s for a CV including the PDF. Each budget is a single deadline on the request's context, and it covers the SDK's own retries, so retrying can never stretch a call past its budget.
   - Server-side refusal fallback is on (`fallbacks: "default"`). A refusal that still stops the call is shown as an error, and nothing is saved.
 - **Every call writes one usage row:** what it was for, the model that actually answered, input / output / cached token counts, the price at the time of the call, the cost, how long it took and whether it succeeded. Before each call the app checks the month's spend against the $50 stop. The Usage view shows which model answered each call, so a reply from the fallback model is visible.
 - **Changing the model, effort or prompt:**
