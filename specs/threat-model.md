@@ -93,6 +93,7 @@ Last updated: 2026-10-19, accepted threats decided
 | T-36 | A local process skips nginx, calls the app directly and fakes the client IP, defeating the per-IP sign-in delays | Spoofing | Rule: no TCP port; the app listens on a unix socket that only nginx's user can open | Architecture, Server units; socket permission test |
 | T-37 | Root on the server deletes every backup and every old file version | Tampering | Rule: the server's storage keys can't delete object versions; checked in the walking skeleton, with a fallback recorded if Spaces can't do it | Architecture, One-time setup |
 | T-38 | A server compromise goes unnoticed | Repudiation | Rule: SSH sign-ins and sudo events are shipped off the server, with an alert on either by an account other than the admin account | Architecture, Telemetry |
+| T-41 | The CI service is down, so reviews, merges and deploys stop | Denial of service | Rule: the running app, backups and alerts don't depend on CI; CI deploys only by calling `scripts/deploy.sh`, which can also be run by hand; runbook below | Architecture, Deploy order; Runbooks |
 
 ## Accepted
 - **A-1** (T-14): the master key and the database share one server, so root access reads both; the encryption protects dumps and backups only. Accepted (the owner's decision), because there is one server and one user. A cloud key service was considered and deferred: the server has no cloud identity, so it would hold that service's credential too, and root could still decrypt through it; it adds logging and revocation, not prevention. Revisit when there are two app servers or a second user: move the master key to a key service.
@@ -126,6 +127,13 @@ Last updated: 2026-10-19, accepted threats decided
 1. In the Cloudflare dashboard, delete the lost passkey under the user's MFA devices.
 2. Sign in to the Access App Launcher with an email code and register a passkey on the device in hand.
 3. If the laptop was lost: remove its SSH key from the server (through the hosting provider's web console if needed), set a new app password with `cvwriter set-password`, and delete every session.
+
+**GitHub Actions is down**
+1. Check the provider's status page. The running app, backups and alerts don't depend on it; only reviews, the test lock, deploys, the daily sweep and the tripwire wait.
+2. Default: wait. Pull requests queue and nothing is lost. Never remove a required check to get a merge through.
+3. An urgent fix: the owner merges it with the admin bypass. The daily sweep lists it under "Merged without a PASS".
+4. Deploy it by running `scripts/deploy.sh` by hand, with the owner's OK. It is the same script CI runs, in the same order.
+5. When Actions is back: run the reviewer on the merged change and record its verdict on the pull request.
 
 **A backup fails, or the restore test fails**
 1. The alert names the step. Run the backup job by hand and read its log.
