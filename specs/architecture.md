@@ -12,6 +12,7 @@ Last updated: 2026-10-19, first draft (depends on ADR-003, ADR-004 and ADR-005)
 |---|---|---|---|
 | User (`users`) | Email, password hash, timezone, spend alert and stop | One row for now; every other row belongs to exactly one user. The password hash is argon2id. Timezone and spend limits are per user; new users get the defaults from the environment. | ADR-002 |
 | Session (`sessions`) | Who is signed in | Only the SHA-256 of a random 32-byte token is stored. A session ends 14 days after last use, 30 days after creation, on sign-out, or when the password changes. Last use is written at most once an hour. | — |
+| Security event (`security_events`) | Who changed what, for incidents | Insert-only (grants plus a trigger). `kind` is `signed_in`, `sign_in_failed`, `signed_out`, `password_changed`, `api_key_changed` or `sessions_ended`, with the time, the session's id and the client IP; a key change records only the last 4 characters. Failed sign-ins are recorded only for an existing account (unknown emails stay in `login_attempts`). Never a password, key or token. The client IP is cleared after 90 days. | ADR-002 |
 | Login attempt (`login_attempts`) | Recent failed sign-ins | Counted per account and per client IP; each failure lengthens the wait before the next try. An account is never locked. Rows older than 24 hours are deleted, so client IPs aren't kept. | — |
 | API key (`api_keys`) | The user's Claude key, encrypted | At most one per user. AES-256-GCM with `user_id` as associated data and a `key_version`; only the last 4 characters are ever shown; stored only after a test call succeeds. Changing it needs the current password. | ADR-001 |
 | Ad (`ads`) | The pasted ad and its analysis | `raw_ad` never changes. An ad is stored only with an analysis that passed its schema check; a failed analysis stores no ad. The list columns, `search_vector` and `keyword_terms` are generated from `analysis`. | ADR-002 |
@@ -23,7 +24,7 @@ Last updated: 2026-10-19, first draft (depends on ADR-003, ADR-004 and ADR-005)
 | Application event (`application_events`), Feature 2 | Where each application stands | Insert-only; an ad's status is its latest event. | — |
 
 ### Relationships
-- A user has many sessions, login attempts, ads, reference CVs and Claude calls, and at most one API key.
+- A user has many sessions, security events, login attempts, ads, reference CVs and Claude calls, and at most one API key.
 - An ad has many CV jobs and many CV versions. A done CV job has exactly one CV version; a CV version comes from exactly one job.
 - A CV version has many CV events.
 - An ad references the Claude call that analysed it; a CV version references the Claude call that wrote it. A failed call belongs to neither.
@@ -110,7 +111,7 @@ Go modules live under `internal/<module>/`; others import only `internal/<module
 
 | Module | Owns | Others reach it through |
 |---|---|---|
-| `account` | `users`, `sessions`, `login_attempts`, `api_keys` | `CurrentUser(ctx)`, `Settings(ctx)`; `DecryptKey(ctx, userID)`, which only `claude` may call (depguard) |
+| `account` | `users`, `sessions`, `security_events`, `login_attempts`, `api_keys` | `CurrentUser(ctx)`, `Settings(ctx)`; `DecryptKey(ctx, userID)`, which only `claude` may call (depguard) |
 | `ads` | `ads` | `Create`, `Get`, `List`, `Search` |
 | `cvs` | `cv_jobs`, `cv_versions`, `cv_events`, `reference_cvs` | `StartJob`, `JobEvents`, `ListVersions`, `Flag`, `Unflag`, `DownloadLink`, `ReferenceText` |
 | `usage` | `claude_calls` | `Record`, `MonthSpend`, `Summary` |

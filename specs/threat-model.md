@@ -1,7 +1,7 @@
 # Threat model: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-THREAT-MODEL.md.
-     Status: draft. Accepted threats decided: A-1 to A-5. Awaiting: A-6, A-7. -->
+     Status: draft. Accepted threats decided: A-1 to A-6. Awaiting: A-7. -->
 
 Last updated: 2026-10-19, first draft
 
@@ -41,7 +41,7 @@ Last updated: 2026-10-19, first draft
 | T-2 | A stolen database or backup is used to sign in | Spoofing | Rule: only token hashes and argon2id hashes are stored | Architecture, Sign-in; schema test |
 | T-3 | Session fixation, or a cookie planted by a sibling site | Tampering | Rule: a new token at every sign-in; `__Host-` cookie on its own subdomain | ADR-005; cookie test |
 | T-4 | A request forged from another site uses the cookie | Tampering | Rule: SameSite=Strict, JSON-only API, `Origin` checked on every change | Architecture, Sign-in; CSRF test |
-| T-5 | "I didn't do that": no record of who changed what | Repudiation | Accepted, see A-6 | — |
+| T-5 | "I didn't do that": no record of who changed what | Repudiation | Rule: an insert-only `security_events` table (sign-ins, failed sign-ins, password and key changes, sessions ended); the Access sign-in log at Cloudflare; the off-server SSH and sudo log (T-38). Residual accepted, see A-6 | Architecture, Domain model; event test |
 | T-6 | A sign-in reply reveals whether an email has an account | Information disclosure | Test: the same error and timing for an unknown email | Sign-in test |
 | T-7 | A login flood exhausts the shared server's memory | Denial of service | Rule: at most 2 password hashes at a time; nginx and app rate limits; `MemoryMax=` | Architecture, Sign-in and Server units |
 | T-8 | An unattended signed-in browser changes the password or key | Elevation of privilege | Rule: the current password for both; a new password ends other sessions | Architecture, Sign-in; settings test |
@@ -100,7 +100,7 @@ Last updated: 2026-10-19, first draft
 - **A-3** (T-34): cvwriter shares a server with other sites, and stays there (the owner's decision). Root on that server reaches cvwriter's data and keys, and nothing on the server can stop it. Accepted, with conditions that narrow the ways to root (T-34), limit what root can take or destroy (T-15's spend limit on the key, T-37) and make a compromise visible off the server (T-38). Revisit when free memory at peak drops under 500 MB, another tenant is affected, or a second user joins.
 - **A-4** (T-17): prompt injection can still bend a CV's wording. Accepted (the owner's decision), because the model has no tools, its output is checked, and the user reads every CV before sending it. Revisit if the model is ever given tools or a CV is sent without review.
 - **A-5** (T-39): one second-factor device. Sign-in needs an email code and a passkey through Access (T-39, T-40), then the app's password, but only one passkey is enrolled, so a lost laptop means a reset in the Cloudflare dashboard (runbook below). The email code alone can be phished; the passkey can't. Accepted (the owner's decision): a backup passkey is deferred. Revisit when a second device is at hand (enrol it), or a second user joins (passkeys in the app).
-- **A-6** (T-5): no audit log of who changed what. Accepted, because there is one user and the history that matters is insert-only. Revisit when a second user joins.
+- **A-6** (T-5): the in-app event log lives in the same database, so root on the server could alter it. Accepted (the owner's decision), because the Access sign-in log and the SSH and sudo log (T-38) are kept off the server. Revisit when a second user joins: ship security events off the server too.
 - **A-7** (T-21): ad and reference CV text are sent to the model provider under the user's own key and that provider's data terms. Accepted, because the product needs it. Revisit if the provider's data retention terms change.
 
 ## Runbooks
