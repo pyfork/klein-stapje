@@ -103,11 +103,12 @@ What breaks if this is wrong:
   - Model strings are placed as text; templates never evaluate model output as Typst code.
   - At most one render at a time; a second request waits within its own deadline.
   - The 2-page and ATS checks (PRD) read the rendered PDF.
+  - A golden-file test in CI renders fixed CV JSON and checks the page count, the extracted text, and a visual diff against a stored image.
   - **Spike in the walking skeleton:** design 1 in Typst, compared side by side with its mock; the text layer and PDF tagging checked.
   - **Fallback if the spike fails fidelity:** C1, with chromedp driving the pinned `chrome-headless-shell` in its own socket-activated systemd unit with `PrivateNetwork=yes`, every page request denied, the font embedded in the page, and its own `MemoryMax=`.
 - **D1: telemetry** (two-way door; OTLP works with any backend):
   - OTLP to a Grafana Cloud free-tier stack. The endpoint and token come from the server's environment.
-  - The browser sends its spans to the app's own `/cvwriter/api/telemetry`, which relays them; no telemetry token is ever in the browser.
+  - The browser sends its spans to the app's own `/cvwriter/api/telemetry`, which relays them; no telemetry token is ever in the browser. The relay requires login and has a size limit per request and a rate limit.
   - The exporter batches and drops spans when its buffer is full, so an outage at the backend never slows a request.
   - Span attributes never hold ad text, CV text, emails or keys; the log test covers this.
 - **E1: front end** (two-way door): React Router and TanStack Query, with no UI component library (brief).
