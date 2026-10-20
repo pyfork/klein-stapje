@@ -92,12 +92,18 @@ shared server behind Cloudflare.
   default certificate is shared by every customer and wouldn't help; revisit
   if a review or test finds a way past the token check, or a second user
   joins.
-- The full `GUARD_TEST_COMMAND` (the web tests added to `go test ./...`), the
-  secret scanner, the dependency audit, code scanning, the API-contract drift
-  check and the planted-bug check: safe because each follows the skeleton in
-  its own PR (start-here step 2b), and the Go tests already run in CI: the
-  owner sets `GUARD_TEST_COMMAND` to `go test ./...` when slice 1's build PR
-  opens, with the first Go code; revisit when the skeleton is merged.
+- The full `GUARD_TEST_COMMAND` (the web tests added), the secret scanner,
+  the dependency audit, code scanning, the API-contract drift check and the
+  planted-bug check: safe because each follows the skeleton in its own PR
+  (start-here step 2b), and the Go checks already run in CI: the owner sets
+  `GUARD_TEST_COMMAND` to
+  `test -z "$(gofmt -l .)" && go vet ./... && go test -race ./...` when
+  slice 1's build PR opens, with the first Go code; revisit when the skeleton
+  is merged.
+- golangci-lint in `GUARD_TEST_COMMAND`: safe because `gofmt` and `go vet`
+  run from the first Go code, and the project has no linter config yet to
+  run it with; revisit when the skeleton is merged, in the same PR that adds
+  the dependency audit and code scanning.
 
 ## Limits it must respect
 - ADR-002: `users` with uuidv7 ids; every user-owned query filters on
