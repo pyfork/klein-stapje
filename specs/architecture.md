@@ -144,6 +144,8 @@ Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `Protect
 7. Cloudflare Access (Sign-in): turn on Zero Trust on the free plan and check that independent MFA is offered there (if not, sign in through a GitHub account protected by a passkey instead, and record that here). Add the One-time PIN identity provider; allow Biometrics only, not applied to all apps; enrol the laptop's Touch ID; create both Access apps; put the AUD tag in the app's config. The Cloudflare account itself has its own second factor.
 
 ### Deploy order (every merge to `main`)
+CI only calls `scripts/deploy.sh`; every step below lives in that script, so a deploy by hand when CI is down runs exactly the same steps (threat model, T-41).
+
 1. CI builds the binary (SPA embedded, `CGO_ENABLED=0`, linux/amd64) and fetches `typst` by pinned version and SHA-256.
 2. Copy both to a new release folder on the server.
 3. Back up the database (the same dump as the nightly job).
