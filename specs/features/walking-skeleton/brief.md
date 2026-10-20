@@ -78,6 +78,13 @@ shared server behind Cloudflare.
 - A locked second copy of files and backups (T-37): safe for the smallest
   working version, the owner's choice, with the risk stated in A-3; revisit on
   ADR-004's trigger (first CVs sent to employers, or a Spaces incident).
+- Per-hostname Authenticated Origin Pulls (nginx turns away other Cloudflare
+  customers' traffic by certificate): safe because the app already rejects
+  any request without a valid Access token for the account's email (T-40),
+  so another Cloudflare site reaching nginx gets only a 401; Cloudflare's
+  default certificate is shared by every customer and wouldn't help; revisit
+  if a review or test finds a way past the token check, or a second user
+  joins.
 - The real `GUARD_TEST_COMMAND`, the secret scanner, the dependency audit,
   code scanning, the API-contract drift check and the planted-bug check: safe
   because each follows the skeleton in its own PR (start-here step 2b); revisit
