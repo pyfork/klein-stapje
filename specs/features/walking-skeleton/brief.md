@@ -36,8 +36,8 @@ shared server behind Cloudflare.
     signed URL, or any planted contact-block value (name, phone, address,
     links). The contact block's email and phone pass through the tested
     paths, so the test has something real to catch. It catches only what the
-    tests run: the planted email and phone, on every tested path. A path no
-    test reaches isn't covered.
+    tests run: the planted contact-block values, on every tested path. A path
+    no test reaches isn't covered.
   - The app refuses, with 401, any request without a valid Access token whose
     email equals the account's (T-40), except `/api/health`.
   - The CI time is written down: push to verdict, and the `locked-checks` job
@@ -65,8 +65,10 @@ shared server behind Cloudflare.
   first deploy; revisit before go-live (threat model, "Go-live").
 - The nightly backup timer, the monthly restore test and the nightly
   fingerprint check: safe because the deploy already backs up the database
-  before every migration, and there are no files to fingerprint yet; revisit
-  before go-live.
+  before every migration, and there are no files to fingerprint yet; a dump
+  that has never been restored is safe to rely on for now because it holds
+  only the contact block, which the owner can type in again in a minute;
+  revisit before go-live.
 - The progress stream's check against Cloudflare's 100-second limit: safe
   because the skeleton has no progress stream, and the fix is known (a
   heartbeat well under nginx's and Cloudflare's idle limits, and buffering
