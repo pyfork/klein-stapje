@@ -32,8 +32,9 @@ shared server behind Cloudflare.
   - Rate, errors and duration are recorded per route pattern.
   - The route test lists every route and fails if one has no non-owner test;
     `/api/health` is listed as public, with its reason.
-  - The log test fails if a log line or span holds an email, a token or a
-    signed URL. The contact block's email and phone pass through the tested
+  - The log test fails if a log line or span holds an email, a token, a
+    signed URL, or any planted contact-block value (name, phone, address,
+    links). The contact block's email and phone pass through the tested
     paths, so the test has something real to catch. It catches only what the
     tests run: the planted email and phone, on every tested path. A path no
     test reaches isn't covered.
