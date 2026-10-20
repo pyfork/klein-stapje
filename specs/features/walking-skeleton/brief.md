@@ -34,7 +34,9 @@ shared server behind Cloudflare.
     `/api/health` is listed as public, with its reason.
   - The log test fails if a log line or span holds an email, a token or a
     signed URL. The contact block's email and phone pass through the tested
-    paths, so the test has something real to catch.
+    paths, so the test has something real to catch. It catches only what the
+    tests run: the planted email and phone, on every tested path. A path no
+    test reaches isn't covered.
   - The app refuses, with 401, any request without a valid Access token whose
     email equals the account's (T-40), except `/api/health`.
   - The CI time is written down: push to verdict, and the `locked-checks` job
