@@ -1,9 +1,10 @@
 # Architecture: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-ARCHITECTURE.md.
-     Status: draft, awaiting the owner's approval. -->
+     Status: draft, awaiting the owner's approval.
+     senior-lead-Opus5.5-agent, 2026-10-20: pre-skeleton spike results (ADR-006), go-live; the server pulls its deploys (T-42). -->
 
-Last updated: 2026-10-19, first draft (depends on ADR-003, ADR-004 and ADR-005)
+Last updated: 2026-10-20, spike results from before the walking skeleton (ADR-006); pull deploy (T-42)
 
 ## Domain model
 
@@ -128,30 +129,34 @@ Every query on a user-owned table filters on `user_id`; a CI check enforces it (
 | Unit | Runs | Credentials (`LoadCredential=`) | Limits |
 |---|---|---|---|
 | `cvwriter.socket` | The unix socket `/run/cvwriter.sock`, owned by `cvwriter`, group `www-data`, mode 0660: only nginx's user can open it, and there is no TCP port | — | — |
-| `cvwriter.service` | The app, as user `cvwriter`, on the socket from `cvwriter.socket`, behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton; `Restart=on-failure` |
+| `cvwriter.service` | The app, as user `cvwriter`, on the socket from `cvwriter.socket`, behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton (a baseline; measured again with PDF rendering, ADR-006); `Restart=on-failure` |
 | `cvwriter-migrate.service` | Oneshot, `cvwriter migrate`, as `cvwriter_owner` | `db-owner-password` | Started only by deploy |
 | `cvwriter-backup.service` + `.timer` | Oneshot, nightly; monthly it also runs the restore test | `backups-key`, `files-key` (read for the fingerprint check), `db-owner-password`, `age-key` | `Nice=`, `IOSchedulingClass=idle` |
+| `cvwriter-fetch.service` + `.timer` | Oneshot, every 5 minutes, as user `cvwriter-deploy` (no sudo): downloads the newest release built from `main` into the hand-off folder `/var/lib/cvwriter-deploy/incoming` (Deploy order, step 2) | None: the repository is public | `Nice=` |
+| `cvwriter-deploy.path` + `.service` | A root-owned path unit watches the hand-off folder and starts the oneshot, as root: it checks the release itself (step 3) and only then runs `scripts/deploy.sh`. It never trusts `cvwriter-deploy`'s own check | — | — |
 
 Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `IPAddressDeny=169.254.169.254`. nginx reaches only the app unit. A test checks the socket's owner, group and mode.
 
 ### One-time setup
 1. As the database superuser: create roles `cvwriter_owner` (LOGIN, owns database `cvwriter`) and `cvwriter` (LOGIN, CONNECT only). Neither is a superuser (ADR-002).
-2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004). Neither key may delete object versions. The walking skeleton checks whether Spaces can grant that; if not, the fallback is chosen then and recorded here.
+2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004). Spaces can't make a key that writes without deleting: a Read/Write key can delete an old version, though not suspend versioning or add a lifecycle rule (checked 2026-10-20, ADR-006). Until ADR-004's trigger adds a locked second copy, the keys stay one per bucket, and the backup job runs as its own user.
 3. Create an `age` key pair. Install the private key and every other credential as root-only files (mode 0400) referenced by the units.
 4. The owner keeps an offline copy of the master key and the `age` private key, never in a bucket or in git, and decrypts one dump with that copy to prove it works.
 5. The subdomain (ADR-005): a proxied DNS record at Cloudflare, an nginx server block with a certificate, and `proxy_set_header X-Real-IP $remote_addr`. The old path on the shared site redirects to the subdomain, with or without a trailing slash, keeping the rest of the path: `302` until the subdomain is verified, then `301`. The Access apps (step 7) exist before the DNS record does.
-6. Before go-live, on the shared server: no service runs as an account that can use sudo, and every account with full sudo is a named admin account in use. A log shipper sends SSH sign-ins and sudo events to Grafana Cloud.
-7. Cloudflare Access (Sign-in): turn on Zero Trust on the free plan and check that independent MFA is offered there (if not, sign in through a GitHub account protected by a passkey instead, and record that here). Add the One-time PIN identity provider; allow Biometrics only, not applied to all apps; enrol the laptop's Touch ID; create both Access apps; put the AUD tag in the app's config. The Cloudflare account itself has its own second factor.
+6. Before go-live (threat model, "Go-live"), on the shared server: no service runs as an account that can use sudo, and every account with full sudo is a named admin account in use. A log shipper sends SSH sign-ins and sudo events to Grafana Cloud.
+7. Cloudflare Access (Sign-in): turn on Zero Trust on the free plan; independent MFA with Biometrics is offered there (checked 2026-10-20). Add the One-time PIN identity provider; allow Biometrics only, not applied to all apps; enrol the laptop's Touch ID; create both Access apps; put the AUD tag in the app's config. The Cloudflare account itself has its own second factor.
+8. Deploys (threat model, T-42): create user `cvwriter-deploy` with no sudo and no SSH key, install the fetch, path and deploy units, and write the expected signer (this repository, its deploy workflow, branch `main`) into the deploy unit's root-only config. CI gets no secret for the server.
 
 ### Deploy order (every merge to `main`)
-CI only calls `scripts/deploy.sh`; every step below lives in that script, so a deploy by hand when CI is down runs exactly the same steps (threat model, T-41).
+The server pulls its deploys: CI holds no credential that reaches the server (threat model, T-42). Steps 4 to 7 live in `scripts/deploy.sh`, so a deploy by hand when CI is down runs exactly the same steps (T-41).
 
-1. CI builds the binary (SPA embedded, `CGO_ENABLED=0`, linux/amd64) and fetches `typst` by pinned version and SHA-256.
-2. Copy both to a new release folder on the server.
-3. Back up the database (the same dump as the nightly job).
-4. Run `cvwriter-migrate.service` with the new binary. Migrations are compatible with the running binary (ADR-003).
-5. Switch the `current` link to the new release and restart `cvwriter.service`. A CV job running at that moment ends as failed and can be retried.
-6. Smoke test: the health check, then a signed link to the canary object (ADR-004). On failure, switch the link back and restart; the schema stays.
+1. CI builds the binary (SPA embedded, `CGO_ENABLED=0`, linux/amd64), fetches `typst` by pinned version and SHA-256, packs both into a release archive, and publishes it with its SHA-256 and a signed build record (GitHub artifact attestation) under its run number.
+2. The fetch timer, as `cvwriter-deploy`, finds a release whose run number is higher than the running one's and isn't on the failed list, and downloads it, with its SHA-256 and signed build record, into the hand-off folder. It can't start anything as root.
+3. The path unit starts `cvwriter-deploy.service`, as root, which checks the SHA-256, that the signed build record names this repository's deploy workflow on `main`, and the run number, then unpacks the release to a new release folder. A failed check deploys nothing, adds the run number to the failed list in `/var/lib/cvwriter-releases/failed` (a root-owned folder `cvwriter-deploy` can read but not change), and alerts. How the server checks the build record without a GitHub sign-in is tested first in slice 1; if it can't, the fallback is a signing key whose public half is pinned in the deploy unit's config.
+4. Back up the database (the same dump as the nightly job).
+5. Run `cvwriter-migrate.service` with the new binary. Migrations are compatible with the running binary (ADR-003).
+6. Switch the `current` link to the new release and restart `cvwriter.service`. A CV job running at that moment ends as failed and can be retried.
+7. Smoke test: the health check, then a signed link to the canary object (ADR-004). On failure, switch the link back, restart, add the run number to the failed list (so the timer doesn't retry it) and alert; the schema stays. Going back to an older build on purpose is a deploy by hand (threat model, runbooks), since the timer only moves forward.
 
 ### Backups and restore
 - **Nightly:**
@@ -159,15 +164,15 @@ CI only calls `scripts/deploy.sh`; every step below lives in that script, so a d
   - Encryption protects the dumps if the bucket or its key leaks. The private key is a server credential (for the restore test), and the owner's offline copy means a lost server doesn't lose the backups.
   - Every object in `cvwriter-files` is checked against the SHA-256 and size stored in `cv_versions` and `reference_cvs`.
   - Success writes a metric. An alert fires when no success has happened in 26 hours, or on any mismatch.
-- **Retention:** dumps are kept 90 days, removed by a lifecycle rule on the bucket, not by the server's key (which can't delete). Files rely on versioning, and older versions are kept (ADR-004).
+- **Retention:** dumps are kept 90 days, removed by a lifecycle rule on the bucket, never by the server's code (its key could delete, ADR-006). Files rely on versioning, and older versions are kept (ADR-004).
 - **Restore test, monthly and automated:** the latest dump is decrypted, restored into a scratch database, and its row counts are compared with production; then the scratch database is dropped. A failure alerts.
 - **Accepted risk:** files and backups share one provider and one account (ADR-004).
 
 ### Telemetry
 - Traces and metrics go over OTLP to Grafana Cloud. Browser spans are relayed through `/api/telemetry`, which requires sign-in and has size and rate limits (ADR-003).
 - An uptime probe hits `/api/health`.
-- Alerts: the uptime probe, the backup's last success, the restore test, Claude spend at the user's alert level, the nightly fingerprint check, and an SSH sign-in or sudo use by an account other than the admin account.
-- The walking skeleton checks that a CV job's SSE stream survives Cloudflare's 100-second idle limit (progress events keep it busy).
+- Alerts: the uptime probe, the backup's last success, the restore test, Claude spend at the user's alert level, the nightly fingerprint check, a failed deploy check or deploy, and an SSH sign-in or sudo use by an account other than the admin account.
+- A CV job's SSE stream must survive Cloudflare's 100-second idle limit and nginx's `proxy_read_timeout` (60 s by default): the Generate slice's acceptance criteria cover a heartbeat well under both and nginx buffering turned off for the stream. If the stream still drops, the page polls the job's status instead.
 
 ## Scale path
 Sized for the PRD's load: one user, ~250 ads and ~500 CV versions a year. Growth is handled by measured triggers, not by building ahead.

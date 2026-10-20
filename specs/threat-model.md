@@ -1,9 +1,11 @@
 # Threat model: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-THREAT-MODEL.md.
-     Status: every accepted threat decided (A-1 to A-7); ready for review. -->
+     Status: every accepted threat decided (A-1 to A-7); ready for review.
+     senior-lead-Opus5.5-agent, 2026-10-20: T-37 after the Spaces test (ADR-006); go-live defined;
+     TB-6 and T-42, the server pulls its deploys. -->
 
-Last updated: 2026-10-19, accepted threats decided
+Last updated: 2026-10-20, T-37 after the Spaces test; go-live defined; TB-6 and T-42 (pull deploy)
 
 ## Assets
 | Asset | Who may read it | Who may change it |
@@ -25,6 +27,7 @@ Last updated: 2026-10-19, accepted threats decided
 | TB-3 | App and browser to Spaces | The app (keys); the browser (signed links) | DigitalOcean | PDFs, uploaded files, encrypted dumps; signed download links |
 | TB-4 | App and server to the telemetry backend | The app; the server's log shipper | Grafana Cloud | Route patterns, timings and counts; the server's SSH sign-in and sudo events; no personal data |
 | TB-5 | The shared server | Other sites and their users on the same server | cvwriter's processes, files and database | Memory and CPU contention; anything a compromised neighbour reaches |
+| TB-6 | CI to the server (deploys) | GitHub Actions, building from `main` | The server's deploy timer | The release archive, its SHA-256 and its signed build record, fetched by the server. No credential for the server crosses: CI holds none |
 
 ## Riskiest flows
 1. **Sign-in and the session:** crosses TB-1.
@@ -91,14 +94,18 @@ Last updated: 2026-10-19, accepted threats decided
 | T-34 | A compromised neighbour on the shared server becomes root and reaches cvwriter | Elevation of privilege | Rule, before go-live: no service on the server runs as an account that can use sudo, and every account with full sudo is a named admin account in use; cvwriter's units are sandboxed. Residual accepted, see A-3 | Architecture, Server units and One-time setup |
 | T-35 | Real ads, real CVs or the private test set are committed to the public repository | Information disclosure | Rule: content rules; a pre-push check; the test set lives only on the server | Content rules |
 | T-36 | A local process skips nginx, calls the app directly and fakes the client IP, defeating the per-IP sign-in delays | Spoofing | Rule: no TCP port; the app listens on a unix socket that only nginx's user can open | Architecture, Server units; socket permission test |
-| T-37 | Root on the server deletes every backup and every old file version | Tampering | Rule: the server's storage keys can't delete object versions; checked in the walking skeleton, with a fallback recorded if Spaces can't do it | Architecture, One-time setup |
+| T-37 | Root on the server deletes every backup and every old file version | Tampering | Rule: the server's code never overwrites or deletes an object; one key per bucket, and the backup job runs as its own user; the nightly check reports a changed or missing object. Spaces keys can still delete old versions (ADR-006), so the rest is accepted in A-3 until ADR-004's trigger adds a locked second copy | Architecture, One-time setup; ADR-006 |
 | T-38 | A server compromise goes unnoticed | Repudiation | Rule: SSH sign-ins and sudo events are shipped off the server, with an alert on either by an account other than the admin account | Architecture, Telemetry |
-| T-41 | The CI service is down, so reviews, merges and deploys stop | Denial of service | Rule: the running app, backups and alerts don't depend on CI; CI deploys only by calling `scripts/deploy.sh`, which can also be run by hand; runbook below | Architecture, Deploy order; Runbooks |
+| T-41 | The CI service is down, so reviews, merges and deploys stop | Denial of service | Rule: the running app, backups and alerts don't depend on CI; CI only builds and signs the release, and every deploy runs `scripts/deploy.sh` on the server, which can also be run by hand; runbook below | Architecture, Deploy order; Runbooks |
+| T-42 | A build that didn't come from a merge to `main` is deployed: a stolen CI secret, a tampered download, or an older build replayed | Tampering, Elevation of privilege | Rule: the server pulls its deploys, so CI holds no credential that reaches the server. The deploy timer downloads as `cvwriter-deploy`, a user with no sudo that can't start anything as root. A root-owned unit then checks the build itself and runs `scripts/deploy.sh` only on a build whose SHA-256 matches, whose signed build record names this repository's deploy workflow on `main`, and whose run number is higher than the running one's and not on the failed list. A failed check or a failed deploy adds the build to that list, so it is never retried, and alerts. A real merge to `main` still deploys: that is guarded by the merge rules (review, test lock), not here | Architecture, Server units and Deploy order |
+
+## Go-live
+Go-live is the moment the first real job ad or Claude API key is stored on the server (feature 1's first slice). Every rule marked "before go-live" holds from then: T-34's server-wide sudo rule, T-38's off-server log, and the app's password sign-in (A-5). Until then the server holds only the contact block, the same details every CV carries. cvwriter's own units are sandboxed from the first deploy.
 
 ## Accepted
 - **A-1** (T-14): the master key and the database share one server, so root access reads both; the encryption protects dumps and backups only. Accepted (the owner's decision), because there is one server and one user. A cloud key service was considered and deferred: the server has no cloud identity, so it would hold that service's credential too, and root could still decrypt through it; it adds logging and revocation, not prevention. Revisit when there are two app servers or a second user: move the master key to a key service.
 - **A-2** (T-30): files and every backup sit with one provider, in one account. Accepted (the owner's choice). Revisit when the first CVs are sent to employers, or on a Spaces incident.
-- **A-3** (T-34): cvwriter shares a server with other sites, and stays there (the owner's decision). Root on that server reaches cvwriter's data and keys, and nothing on the server can stop it. Accepted, with conditions that narrow the ways to root (T-34), limit what root can take or destroy (T-15's spend limit on the key, T-37) and make a compromise visible off the server (T-38). Revisit when free memory at peak drops under 500 MB, another tenant is affected, or a second user joins.
+- **A-3** (T-34): cvwriter shares a server with other sites, and stays there (the owner's decision). Root on that server reaches cvwriter's data and keys, and nothing on the server can stop it. Accepted, with conditions that narrow the ways to root (T-34), limit what root can take or destroy (T-15's spend limit on the key, T-37) and make a compromise visible off the server (T-38). T-37 holds only in part: Spaces keys can delete old versions (ADR-006), so until a locked second copy exists, root can destroy file history and backups, and the nightly check can only report it (the owner's choice, for the smallest working version). Revisit when free memory at peak drops under 500 MB, another tenant is affected, or a second user joins.
 - **A-4** (T-17): prompt injection can still bend a CV's wording. Accepted (the owner's decision), because the model has no tools, its output is checked, and the user reads every CV before sending it. Revisit if the model is ever given tools or a CV is sent without review.
 - **A-5** (T-39): one second-factor device. Sign-in needs an email code and a passkey through Access (T-39, T-40), then the app's password, but only one passkey is enrolled, so a lost laptop means a reset in the Cloudflare dashboard (runbook below). The email code alone can be phished; the passkey can't. Accepted (the owner's decision): a backup passkey is deferred. Revisit when a second device is at hand (enrol it), or a second user joins (passkeys in the app).
 - **A-6** (T-5): the in-app event log lives in the same database, so root on the server could alter it. Accepted (the owner's decision), because the Access sign-in log and the SSH and sudo log (T-38) are kept off the server. Revisit when a second user joins: ship security events off the server too.
@@ -132,7 +139,7 @@ Last updated: 2026-10-19, accepted threats decided
 1. Check the provider's status page. The running app, backups and alerts don't depend on it; only reviews, the test lock, deploys, the daily sweep and the tripwire wait.
 2. Default: wait. Pull requests queue and nothing is lost. Never remove a required check to get a merge through.
 3. An urgent fix: the owner merges it with the admin bypass. The daily sweep lists it under "Merged without a PASS".
-4. Deploy it by running `scripts/deploy.sh` by hand, with the owner's OK. It is the same script CI runs, in the same order.
+4. Deploy it by hand, with the owner's OK: build it on the laptop, copy it to the server as the admin account, and run `scripts/deploy.sh` on that folder. It is the same script the deploy timer runs, in the same order; only this path skips the signed-build check, because no CI run signed it and the admin account already has root.
 5. When Actions is back: run the reviewer on the merged change and record its verdict on the pull request.
 
 **A backup fails, or the restore test fails**
