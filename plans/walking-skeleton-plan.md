@@ -42,7 +42,11 @@
   switch to and back from, and sign-in (slice 3) can only be tried once the
   app runs on the server.
 - **Why this size:** one statement, one trigger (the owner runs
-  `scripts/deploy.sh`), one outcome (the release runs only if healthy).
+  `scripts/deploy.sh`), one outcome (the release runs only if healthy). The
+  app's own code (the `serve` command, its health and not-found answers,
+  its start-up errors and log line) is in this SHARED slice because neither
+  half works alone: the units and the deploy script have nothing to run or
+  health-check without it, and it can't run on the server without them.
   Estimated about 340 product-code lines: the `serve` command, the health
   and not-found handlers, the logger, `go.mod`, `.env.example`, two unit
   files, `scripts/build-release.sh` and `scripts/deploy.sh`. Split out of
@@ -51,25 +55,28 @@
 - **Locked checks:** three `CHECK` groups in one script, no REGRESSION
   groups.
   - CHECK 1, the app (AC-1 to AC-8), on a real PostgreSQL 18.6: health 200
-    with exactly `{"status":"ok"}`; a database that answers after about 1 s
-    gives 200, one that answers after about 2.5 s, hangs or is stopped gives
+    with exactly `{"status":"ok"}`; a database that answers after about
+    1.7 s gives 200, one that answers after about 2.5 s, hangs or is stopped gives
     503 within 3 s as `application/problem+json` with only `type`, `title`
     and `status`; `GET /`, `GET /api/me` and `POST /api/health` give 404 the
     same way; no TCP or UDP port; every log line is JSON with `service` and
     `version`, with `invocation_id` when `INVOCATION_ID` is set and without
-    it when not; an unknown command exits 2 without echoing it, a missing
+    it when not, and releases the deploy starts log their own version; an
+    unknown command exits 2 without echoing it, a missing
     `CVWRITER_DATABASE_URL` or socket exits 1 naming it, each as a line
     under 80 characters on standard error.
   - CHECK 2, the deploy script (AC-9 to AC-13): `s001-a`, `s001_b.2` and a
-    64-character version deploy in turn and earlier folders stay; a release
-    healthy after about 8 s is kept and one healthy only after about 12 s is
+    64-character version deploy in turn and earlier folders stay; the
+    earlier `s001-a`, deployed again, is unpacked afresh; a release healthy
+    after about 9 s is kept and one healthy only after about 12 s is
     switched back, with the earlier release's unit files installed again and
-    healthy; on a fresh root, a first release healthy after about 8 s is
+    healthy; on a fresh root, a first release healthy after about 9 s is
     kept and one healthy only after about 12 s leaves the app and socket
     stopped and no `current`; the running version, an empty version, `.`,
     `..`, `../x`, `-a`, `a b`, `a;b`, `s001-é` and 65 characters are
     refused with nothing changed; a release archived with group- and
-    world-writable files and another owner unpacks with neither.
+    world-writable files, deployed under umask 000 so a plain unpack would
+    keep them, unpacks with neither.
   - CHECK 3, the unit files (AC-14): the socket's only listener, user,
     group and mode; the service's command, user, socket, restart, memory
     limits, database URL (no password, no environment file) and the five
@@ -85,8 +92,10 @@
   down: 503 within 3 s); 5, 6, 12 and 15 (a release version that is the
   running one, empty, or breaks the version rule: `.`, `..`, `../x`, a
   leading `-`, a space, `;`, a non-ASCII letter: refused); 14 (the 2-second
-  database limit, the 10-second wait for first and later releases, and the
-  64-character version, each with a case on either side); 22 (`/api/health`
+  database limit (about 1.7 s and 2.5 s), the 10-second wait for first and
+  later releases (about 9 s and 12 s), and the 64-character version, each
+  with a case on either side); 6 again (a version whose folder exists but
+  isn't running is unpacked afresh); 22 (`/api/health`
   returns no data, the 503 names nothing, the unit holds no password, and
   nothing outside the server reaches the app); 23 (no records exist); 25
   (the `cvwriter` unit and folder left from an earlier setup predate

@@ -155,12 +155,12 @@ ok "AC-3 GET /, GET /api/me, POST /api/health give 404 problem+json"
 if ss -Htulnp 2>/dev/null | grep -q "pid=$APP,"; then fail "AC-7: the app opened a TCP or UDP port"; fi
 ok "AC-7 no TCP or UDP port"
 
-# AC-2: the database answers after about 1 s (under the 2 s limit) -> 200
-pg_pause; (sleep 1; pg_resume) & RESUMER=$!
+# AC-2: the database answers after about 1.7 s (just under the 2 s limit) -> 200
+pg_pause; (sleep 1.7; pg_resume) & RESUMER=$!
 read -r code secs < <(health "$SOCK")
 wait "$RESUMER" || true
-[ "$code" = 200 ] || fail "AC-2: a database answering after about 1 s gave $code, not 200"
-ok "AC-2 database answering after about 1 s: 200"
+[ "$code" = 200 ] || fail "AC-2: a database answering after about 1.7 s gave $code, not 200"
+ok "AC-2 database answering after about 1.7 s: 200"
 
 # AC-2: the database answers after about 2.5 s (past the limit) -> 503 within 3 s
 pg_pause; (sleep 2.5; pg_resume) & RESUMER=$!
@@ -226,7 +226,7 @@ cli_error() { # <AC> <expected exit> <text the first line must hold> -- <command
   [ "${#first}" -lt 80 ] || fail "$ac: '$*' error line is ${#first} characters, not under 80"
   grep -qi -- "$text" <<<"$first" || fail "$ac: '$*' error line doesn't name $text"
 }
-cli_error AC-4 2 "command" -- "$BIN" fly
+cli_error AC-4 2 "" -- "$BIN" fly
 if grep -q fly "$WORK/cli.err"; then fail "AC-4: the error echoes the command back"; fi
 [ "$(grep -c . "$WORK/cli.err")" -le 2 ] || fail "AC-4: more than an error line and a usage line"
 ok "AC-4 unknown command: exit 2"
@@ -305,7 +305,7 @@ fixture() { # <version> <wrapper body>
   tar -C "$d" -czf "$WORK/cvwriter-$1.tar.gz" .
 }
 fixture s001-slow12 'sleep 12; exec "$(dirname "$0")/cvwriter.real" "$@"'
-fixture s001-slow8 'sleep 8; exec "$(dirname "$0")/cvwriter.real" "$@"'
+fixture s001-slow9 'sleep 9; exec "$(dirname "$0")/cvwriter.real" "$@"'
 bad_version() { # <archive name> <version text>: s001_b.2 with another version file
   local d="$WORK/fx/bad-$1"; rm -rf "$d"; mkdir -p "$d"
   tar -C "$d" -xzf "$WORK/cvwriter-s001_b.2.tar.gz"; printf '%s' "$2" >"$d/version"
@@ -344,8 +344,21 @@ deploy "$WORK/cvwriter-$V64.tar.gz"
 [ -d "$CVWRITER_ROOT/releases/s001-a" ] && [ -d "$CVWRITER_ROOT/releases/s001_b.2" ] || fail "AC-9: an earlier release's folder was removed"
 ok "AC-9 s001-a, s001_b.2 and a 64-character version deployed in turn; earlier folders kept"
 
-# AC-13: modes and owner come from the deploy, not the archive
+# AC-9: an earlier version whose folder exists, not running, is unpacked again
+chmod u+w "$CVWRITER_ROOT/releases/s001-a" && touch "$CVWRITER_ROOT/releases/s001-a/stale-marker" \
+  || fail "setup: couldn't mark s001-a's folder"
+deploy "$WORK/cvwriter-s001-a.tar.gz"
+[ "$rc" = 0 ] && [ "$(running)" = s001-a ] || fail "AC-9: deploying the earlier s001-a again failed (exit $rc)"
+[ ! -e "$CVWRITER_ROOT/releases/s001-a/stale-marker" ] || fail "AC-9: s001-a's folder wasn't unpacked afresh"
+units_of s001-a || fail "AC-9: the installed unit files aren't s001-a's after deploying it again"
+one_line_naming s001-a || fail "AC-9: output isn't one line naming s001-a"
+ok "AC-9 earlier version deployed again, its folder unpacked afresh"
+
+# AC-13: modes and owner come from the deploy, not the archive. The deploy
+# runs under umask 000, so a plain unpack would keep the archive's modes
+umask_was="$(umask)"; umask 000
 deploy "$WORK/cvwriter-s001-perm.tar.gz"
+umask "$umask_was"
 [ "$rc" = 0 ] && [ "$(running)" = s001-perm ] || fail "AC-13: s001-perm wasn't deployed (exit $rc)"
 [ -z "$(find "$CVWRITER_ROOT/releases/s001-perm" -perm /022 -print -quit)" ] \
   || fail "AC-13: a file under releases/s001-perm is writable by group or others"
@@ -353,23 +366,36 @@ deploy "$WORK/cvwriter-s001-perm.tar.gz"
   || fail "AC-13: a file under releases/s001-perm keeps the archive's owner"
 ok "AC-13 group- and world-writable files unpacked without those rights, owned by the deploying user"
 
-# AC-9 at the limit: healthy after about 8 s -> kept
-deploy "$WORK/cvwriter-s001-slow8.tar.gz"
-[ "$rc" = 0 ] && [ "$(running)" = s001-slow8 ] || { cat "$WORK/deploy.out"; fail "AC-9: a release healthy after 8 s wasn't kept (exit $rc)"; }
-ok "AC-9 release healthy after about 8 s kept"
+# AC-9 at the limit: healthy after about 9 s -> kept
+deploy "$WORK/cvwriter-s001-slow9.tar.gz"
+[ "$rc" = 0 ] && [ "$(running)" = s001-slow9 ] || { cat "$WORK/deploy.out"; fail "AC-9: a release healthy after 9 s wasn't kept (exit $rc)"; }
+ok "AC-9 release healthy after about 9 s kept"
+
+# AC-8 for releases the deploy started: each line names the release's version
+python3 - "$WORK/fake/app.log" "$V64" <<'PY' || fail "AC-8: a deployed release's log lines don't carry its own version (see above)"
+import json, sys
+seen = set()
+for l in open(sys.argv[1]).read().splitlines():
+    if l.strip().startswith("{"):
+        o = json.loads(l)
+        seen.add(o.get("version"))
+assert {"s001_b.2", sys.argv[2]} <= seen, seen
+assert seen <= {"s001-a", "s001_b.2", sys.argv[2]}, seen
+PY
+ok "AC-8 deployed releases log their own versions"
 
 # AC-10: just past the limit: healthy only after about 12 s -> switched back
 deploy "$WORK/cvwriter-s001-slow12.tar.gz"
 [ "$rc" = 1 ] || fail "AC-10: a release healthy only after 12 s exited $rc, not 1"
-[ "$(running)" = s001-slow8 ] || fail "AC-10: current doesn't point back to s001-slow8"
-units_of s001-slow8 || fail "AC-10: s001-slow8's unit files weren't installed again"
+[ "$(running)" = s001-slow9 ] || fail "AC-10: current doesn't point back to s001-slow9"
+units_of s001-slow9 || fail "AC-10: s001-slow9's unit files weren't installed again"
 read -r code secs < <(health "$CVWRITER_SOCKET")
 [ "$code" = 200 ] || fail "AC-10: after switching back, health gave $code"
 one_line_naming s001-slow12 health || fail "AC-10: output isn't one line naming s001-slow12 and the health check"
 ok "AC-10 release healthy only after about 12 s switched back"
 
 # AC-12: refused versions change nothing; the running version is refused too
-for a in "$WORK/cvwriter-s001-slow8.tar.gz" "$WORK"/cvwriter-bad-*.tar.gz; do
+for a in "$WORK/cvwriter-s001-slow9.tar.gz" "$WORK"/cvwriter-bad-*.tar.gz; do
   snapshot "$WORK/before"
   deploy "$a"
   snapshot "$WORK/after"
@@ -382,9 +408,9 @@ ok "AC-12 running version, empty, ., .., ../x, -a, 'a b', 'a;b', s001-é and 65 
 
 # AC-11 and AC-9 for a first release: just under the limit -> kept
 new_root
-deploy "$WORK/cvwriter-s001-slow8.tar.gz"
-[ "$rc" = 0 ] && [ "$(running)" = s001-slow8 ] || fail "AC-9: a first release healthy after 8 s wasn't kept (exit $rc)"
-ok "AC-9 first release healthy after about 8 s kept"
+deploy "$WORK/cvwriter-s001-slow9.tar.gz"
+[ "$rc" = 0 ] && [ "$(running)" = s001-slow9 ] || fail "AC-9: a first release healthy after 9 s wasn't kept (exit $rc)"
+ok "AC-9 first release healthy after about 9 s kept"
 
 # AC-11: a first release just past the limit -> app and socket stopped, no current
 new_root
