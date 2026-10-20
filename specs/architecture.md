@@ -132,8 +132,8 @@ Every query on a user-owned table filters on `user_id`; a CI check enforces it (
 | `cvwriter.service` | The app, as user `cvwriter`, on the socket from `cvwriter.socket`, behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton (a baseline; measured again with PDF rendering, ADR-006); `Restart=on-failure` |
 | `cvwriter-migrate.service` | Oneshot, `cvwriter migrate`, as `cvwriter_owner` | `db-owner-password` | Started only by deploy |
 | `cvwriter-backup.service` + `.timer` | Oneshot, nightly; monthly it also runs the restore test | `backups-key`, `files-key` (read for the fingerprint check), `db-owner-password`, `age-key` | `Nice=`, `IOSchedulingClass=idle` |
-| `cvwriter-fetch.service` + `.timer` | Oneshot, every 5 minutes, as user `cvwriter-deploy` (no sudo): fetches the newest release built from `main` and checks it (Deploy order, step 2) | None: the repository is public | `Nice=` |
-| `cvwriter-deploy.service` | Oneshot, as root, started only by a check that passed (or by hand): runs `scripts/deploy.sh` on the checked release folder | — | — |
+| `cvwriter-fetch.service` + `.timer` | Oneshot, every 5 minutes, as user `cvwriter-deploy` (no sudo): downloads the newest release built from `main` into the hand-off folder `/var/lib/cvwriter-deploy/incoming` (Deploy order, step 2) | None: the repository is public | `Nice=` |
+| `cvwriter-deploy.path` + `.service` | A root-owned path unit watches the hand-off folder and starts the oneshot, as root: it checks the release itself (step 3) and only then runs `scripts/deploy.sh`. It never trusts `cvwriter-deploy`'s own check | — | — |
 
 Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectHome=yes`, `PrivateTmp=yes`, `IPAddressDeny=169.254.169.254`. nginx reaches only the app unit. A test checks the socket's owner, group and mode.
 
@@ -145,17 +145,18 @@ Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `Protect
 5. The subdomain (ADR-005): a proxied DNS record at Cloudflare, an nginx server block with a certificate, and `proxy_set_header X-Real-IP $remote_addr`. The old path on the shared site redirects to the subdomain, with or without a trailing slash, keeping the rest of the path: `302` until the subdomain is verified, then `301`. The Access apps (step 7) exist before the DNS record does.
 6. Before go-live (threat model, "Go-live"), on the shared server: no service runs as an account that can use sudo, and every account with full sudo is a named admin account in use. A log shipper sends SSH sign-ins and sudo events to Grafana Cloud.
 7. Cloudflare Access (Sign-in): turn on Zero Trust on the free plan; independent MFA with Biometrics is offered there (checked 2026-10-20). Add the One-time PIN identity provider; allow Biometrics only, not applied to all apps; enrol the laptop's Touch ID; create both Access apps; put the AUD tag in the app's config. The Cloudflare account itself has its own second factor.
-8. Deploys (threat model, T-42): create user `cvwriter-deploy` with no sudo and no SSH key, install the fetch and deploy units, and write the expected signer (this repository, its deploy workflow, branch `main`) into the fetch unit's config. CI gets no secret for the server.
+8. Deploys (threat model, T-42): create user `cvwriter-deploy` with no sudo and no SSH key, install the fetch, path and deploy units, and write the expected signer (this repository, its deploy workflow, branch `main`) into the deploy unit's root-only config. CI gets no secret for the server.
 
 ### Deploy order (every merge to `main`)
-The server pulls its deploys: CI holds no credential that reaches the server (threat model, T-42). Steps 3 to 6 live in `scripts/deploy.sh`, so a deploy by hand when CI is down runs exactly the same steps (T-41).
+The server pulls its deploys: CI holds no credential that reaches the server (threat model, T-42). Steps 4 to 7 live in `scripts/deploy.sh`, so a deploy by hand when CI is down runs exactly the same steps (T-41).
 
 1. CI builds the binary (SPA embedded, `CGO_ENABLED=0`, linux/amd64), fetches `typst` by pinned version and SHA-256, packs both into a release archive, and publishes it with its SHA-256 and a signed build record (GitHub artifact attestation) under its run number.
-2. The fetch timer, as `cvwriter-deploy`, finds a release with a higher run number than the running one, downloads it, and checks the SHA-256 and that the signed build record names this repository's deploy workflow on `main`. Only then is it unpacked to a new release folder and `cvwriter-deploy.service` started. A failed check deploys nothing and alerts.
-3. Back up the database (the same dump as the nightly job).
-4. Run `cvwriter-migrate.service` with the new binary. Migrations are compatible with the running binary (ADR-003).
-5. Switch the `current` link to the new release and restart `cvwriter.service`. A CV job running at that moment ends as failed and can be retried.
-6. Smoke test: the health check, then a signed link to the canary object (ADR-004). On failure, switch the link back and restart; the schema stays.
+2. The fetch timer, as `cvwriter-deploy`, finds a release whose run number is higher than the running one's and isn't on the failed list, and downloads it, with its SHA-256 and signed build record, into the hand-off folder. It can't start anything as root.
+3. The path unit starts `cvwriter-deploy.service`, as root, which checks the SHA-256, that the signed build record names this repository's deploy workflow on `main`, and the run number, then unpacks the release to a new release folder. A failed check deploys nothing, adds the run number to the failed list in `/var/lib/cvwriter-releases/failed` (a root-owned folder `cvwriter-deploy` can read but not change), and alerts. How the server checks the build record without a GitHub sign-in is tested first in slice 1; if it can't, the fallback is a signing key whose public half is pinned in the deploy unit's config.
+4. Back up the database (the same dump as the nightly job).
+5. Run `cvwriter-migrate.service` with the new binary. Migrations are compatible with the running binary (ADR-003).
+6. Switch the `current` link to the new release and restart `cvwriter.service`. A CV job running at that moment ends as failed and can be retried.
+7. Smoke test: the health check, then a signed link to the canary object (ADR-004). On failure, switch the link back, restart, add the run number to the failed list (so the timer doesn't retry it) and alert; the schema stays. Going back to an older build on purpose is a deploy by hand (threat model, runbooks), since the timer only moves forward.
 
 ### Backups and restore
 - **Nightly:**

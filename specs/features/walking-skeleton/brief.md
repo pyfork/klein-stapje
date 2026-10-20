@@ -146,9 +146,11 @@ None.
   contact block stays out of them.
 - Other sites on the server (TB-5): the app has its own user, no TCP port,
   and sandboxed units.
-- CI → server (TB-6): the server fetches the release and checks its SHA-256,
-  its signed build record (this repository's deploy workflow, `main`) and its
-  run number before deploying; CI holds no credential for the server.
+- CI → server (TB-6): an unprivileged user fetches the release; a root-owned
+  unit checks its SHA-256, its signed build record (this repository's deploy
+  workflow, `main`) and its run number (newer, never failed before) before
+  deploying; CI holds no credential for the server. Checking the build record
+  without a GitHub sign-in is slice 1's first test.
 
 ### Key choices
 | The choice | The option not taken | Why |
