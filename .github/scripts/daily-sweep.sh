@@ -45,6 +45,15 @@ elif ! diff <(printf '%s' "$live" | jq -S .) <(jq -S . docs-public/guard-data/ex
     echo '```'; echo "</details>"; } >> "$out"
 fi
 
+# guard-builder-Opus5.5-agent, 2026-10-20: the reviewer's secrets are safe
+# only while the `reviewer` environment is limited to main. Widening it is a
+# setting change no file shows, so check it here (AC-18).
+if ! envcheck="$(bash .github/scripts/verify-install.sh environment 2>&1)"; then
+  found=1; section "⚠️ The reviewer's environment has changed"
+  echo "The \`reviewer\` environment holds the reviewer app's key and the Claude token. Only \`main\` may use it:" >> "$out"
+  echo >> "$out"; printf '%s\n' "$envcheck" | grep '^PROBLEM' | sed 's/^PROBLEM  /- /' >> "$out"
+fi
+
 # kit-keeper-Opus5.5-agent, 2026-09-28: the kit is private. Any kit file
 # (docs/, CLAUDE*.md) tracked on main is public, and stays in history.
 leaked="$(git ls-files -- docs ':(glob)**/CLAUDE*.md' | head -20)"
