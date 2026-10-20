@@ -1,7 +1,9 @@
 # Brief: walking skeleton (feature 0)
 
 <!-- senior-lead-Opus5.5-agent, 2026-10-20. From docs/claude-pkg/TEMPLATE-BRIEF.md.
-     Status: draft, awaiting the owner's approval (merging this PR). -->
+     Status: draft, awaiting the owner's approval (merging this PR).
+     senior-lead-Opus5.5-agent, 2026-10-20, slice 1's plan: six slices; how the
+     server checks a release; what every log line carries; when Go tests join CI. -->
 
 ## Who it's for
 The one cvwriter user, signed in through Cloudflare Access, and every later
@@ -26,7 +28,12 @@ shared server behind Cloudflare.
   stack files):
   - `GET /api/health` returns 200 when the process is up and the database
     answers, and returns no data.
-  - Every log line is JSON and carries `trace_id` and `span_id`.
+  - Every log line is JSON and carries `service`, `version` and, when
+    systemd runs the process, `invocation_id` (systemd's `INVOCATION_ID`).
+    A line written inside a request or a job run (`migrate`, `backup`) also
+    carries `trace_id` and `span_id` from a real span: each job run starts a
+    trace of its own and flushes its spans, with a time limit, before it exits.
+    Lines from before tracing starts carry no trace fields.
   - One save of the contact block shows in Grafana Cloud as one trace, from
     the browser's fetch through the chi route to the SQL statement.
   - Rate, errors and duration are recorded per route pattern.
@@ -85,10 +92,12 @@ shared server behind Cloudflare.
   default certificate is shared by every customer and wouldn't help; revisit
   if a review or test finds a way past the token check, or a second user
   joins.
-- The real `GUARD_TEST_COMMAND`, the secret scanner, the dependency audit,
-  code scanning, the API-contract drift check and the planted-bug check: safe
-  because each follows the skeleton in its own PR (start-here step 2b); revisit
-  when the skeleton is merged.
+- The full `GUARD_TEST_COMMAND` (the web tests added to `go test ./...`), the
+  secret scanner, the dependency audit, code scanning, the API-contract drift
+  check and the planted-bug check: safe because each follows the skeleton in
+  its own PR (start-here step 2b), and the Go tests already run in CI: the
+  owner sets `GUARD_TEST_COMMAND` to `go test ./...` when slice 1's build PR
+  opens, with the first Go code; revisit when the skeleton is merged.
 
 ## Limits it must respect
 - ADR-002: `users` with uuidv7 ids; every user-owned query filters on
@@ -111,9 +120,24 @@ None. The Settings form is plain; the design 1 mock is for the PDF (ADR-006).
 
 ## Rough slice list
 Riskiest first. What each slice holds is settled in its own plan.
-1. Signed in on the real server
-2. Contact block
-3. Storage and numbers
+1. Runs on the server
+2. Deploys itself
+3. Signed in
+4. Telemetry
+5. Contact block
+6. Storage and numbers
+
+Changed in slice 1's plan, from three slices. The first slice, "Signed in on
+the real server", held sign-in (ACCESS), new units on the shared server and
+the pull deploy (SHARED), and was estimated over the diff flag: each
+always-risky change now has a slice of its own. The app runs on the server
+before it deploys itself, because the deploy path needs a running app to
+switch to and back from. Sign-in comes third, because it can only be tried
+once the app runs on the server; until then the app answers nothing but
+`/api/health`, on a local socket, and the subdomain has no DNS record
+(architecture, one-time setup step 5). Telemetry (traces, metrics, the deploy
+alert) is a shared standard, so it is its own slice, before the contact block,
+whose save must show as one trace.
 
 ## Open questions
 None.
@@ -161,8 +185,9 @@ None.
 - CI → server (TB-6): an unprivileged user fetches the release; a root-owned
   unit checks its SHA-256, its signed build record (this repository's deploy
   workflow, `main`) and its run number (newer, never failed before) before
-  deploying; CI holds no credential for the server. Checking the build record
-  without a GitHub sign-in is slice 1's first test.
+  deploying; CI holds no credential for the server. The signed build record is
+  GitHub's own signed workflow token (Key choices). Checking it without a
+  GitHub sign-in is slice 2's first test.
 
 ### Key choices
 | The choice | The option not taken | Why |
@@ -173,16 +198,25 @@ None.
 | The skeleton stays on Spaces alone | A locked second copy now | The owner's choice for the smallest working version; ADR-004's trigger brings it in |
 | The Typst spike moves to the CV-render slice | Keep it in the skeleton | The design 1 mock doesn't exist yet (ADR-006) |
 | The progress-stream check becomes acceptance criteria in the Generate slice | A spike now | The fix is known, and the skeleton has no stream to test |
+| The server checks a release against GitHub's signed workflow token (an OIDC token whose audience carries the release's SHA-256), with Go's standard library | The Sigstore Go library; the cosign tool run as root; a signing key held in CI; the owner signing each release by hand | No new dependency and no secret anywhere, and deploys stay automatic. The token names the repository by its id, the workflow file, the branch and the run number, all signed by GitHub. It is checked after it expires, which is safe because it carries the release's SHA-256, so it can only ever vouch for that one build, and replay is stopped by the run number and the failed list. Its known weak points are answered in slice 2's plan (T-42) |
+| Sign-in (Access, nginx's Cloudflare-only rule, the token check) arrives in slice 3, before any route but `/api/health` exists and before the subdomain's DNS record | All of it from the first deploy | Slices 1 and 2 serve only `/api/health`, which is public by design, on a local socket with no DNS record, so nothing is reachable that sign-in would guard; each always-risky change keeps a slice of its own |
+| Every log line carries `service`, `version` and systemd's invocation id; lines inside a request or a job run also carry real trace ids | Trace ids on request lines only, and an app-made run id elsewhere | Job runs show in Grafana as traces like requests do, and the server's journal already indexes systemd's invocation id |
 | The server pulls its deploys and checks the signed build (T-42) | CI pushes over SSH with a deploy-only key | The server is shared (A-3): a CI secret that reaches it would widen TB-5; with pull, CI holds none |
 
 ### Risky slices
 | Slice | Class (DATA, ACCESS or SHARED) | The assumption it tests | What changes if it is wrong |
 |---|---|---|---|
-| 1. Signed in on the real server | ACCESS, SHARED | Access plus the token check keep everyone else out, new units on the shared server don't disturb the other sites, and the server can deploy itself from a checked build | Sign-in (A-5, T-39, T-40), the server units or the deploy path (T-42) change before anything personal is stored |
-| 2. Contact block | DATA | Personal data can be saved and traced without reaching a log or a span | The logging and tracing set-up changes before ads arrive |
-| 3. Storage and numbers | SHARED | The deploy can prove storage works, and the app fits in the server's free memory | The storage set-up, or the hosting choice (A-3's memory trigger) |
+| 1. Runs on the server | SHARED | New sandboxed units run the app on the shared server without disturbing the other sites, and a release that fails its health check is switched back | The units, their limits or the deploy script change before the server deploys by itself |
+| 2. Deploys itself | ACCESS | The server can check, with no GitHub sign-in and no CI secret, that a release came from this repository's deploy workflow on `main` and is newer than the one running | The deploy path (T-42) changes before anything personal is stored |
+| 3. Signed in | ACCESS | Access plus the token check keep everyone else out | Sign-in (A-5, T-39, T-40) changes before anything personal is stored |
+| 4. Telemetry | SHARED | Traces, metrics and the deploy alert reach Grafana Cloud with no personal data and no token in the root-run units | The telemetry set-up changes before personal data arrives |
+| 5. Contact block | DATA | Personal data can be saved and traced without reaching a log or a span | The logging and tracing set-up changes before ads arrive |
+| 6. Storage and numbers | SHARED | The deploy can prove storage works, and the app fits in the server's free memory | The storage set-up, or the hosting choice (A-3's memory trigger) |
 
 ### Shared standards still missing
-- The sign-in check on every route: built in slice 1.
+- The log line (JSON, with `service`, `version` and `invocation_id`): built
+  in slice 1; its trace fields arrive with tracing in slice 4.
+- The sign-in check on every route: built in slice 3.
+- Traces, metrics and alerts: built in slice 4.
 - Showing a problem+json error next to the field it names, and a loading
-  state on save: built in slice 2.
+  state on save: built in slice 5.
