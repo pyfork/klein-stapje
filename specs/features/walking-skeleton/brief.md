@@ -17,9 +17,11 @@ shared server behind Cloudflare.
 - The user signs in through Cloudflare Access (email code, then Touch ID),
   opens Settings, fills in the contact block (name, phone, email, address,
   links), saves it, reloads the page and sees it kept.
-- Every merge to `main` deploys by itself through `scripts/deploy.sh`, in the
-  architecture's order (build, copy, back up, migrate, switch, restart, smoke
-  test), and switches back when the smoke test fails.
+- Every merge to `main` deploys by itself, and the server pulls it: CI builds
+  and signs the release; a timer on the server fetches it, checks it (T-42)
+  and runs `scripts/deploy.sh`, in the architecture's order (back up, migrate,
+  switch, restart, smoke test), switching back when the smoke test fails. CI
+  holds no credential for the server.
 - The production checks hold (start-here step 2b; the go-chi and react-vite
   stack files):
   - `GET /api/health` returns 200 when the process is up and the database
@@ -53,8 +55,11 @@ shared server behind Cloudflare.
   block; revisit before go-live, since A-5 counts the app's password as part
   of sign-in.
 - Shipping SSH sign-ins and sudo events off the server (T-38), and the
-  server-wide sudo rule in T-34: safe for the same reason; revisit before
-  go-live (threat model, "Go-live").
+  server-wide sudo rule in T-34: safe because until go-live the server holds
+  only the contact block, the same details every CV carries, so a neighbour's
+  compromise, noticed or not, reaches nothing beyond what an employer already
+  sees; and cvwriter's own units are sandboxed under their own user from the
+  first deploy; revisit before go-live (threat model, "Go-live").
 - The nightly backup timer, the monthly restore test and the nightly
   fingerprint check: safe because the deploy already backs up the database
   before every migration, and there are no files to fingerprint yet; revisit
@@ -85,7 +90,7 @@ shared server behind Cloudflare.
 - ADR-006: the Typst spike's new place.
 - Threat model: T-34 (cvwriter's own units), T-36 (unix socket only), T-39 and
   T-40 (Access in front, token checked), T-41 (deploys only through
-  `scripts/deploy.sh`).
+  `scripts/deploy.sh`), T-42 (the server pulls and checks its deploys).
 - PRD budgets: 99% uptime with automatic restart; WCAG 2.2 AA for the Settings
   screen, checked in the browser tests.
 
@@ -93,15 +98,10 @@ shared server behind Cloudflare.
 None. The Settings form is plain; the design 1 mock is for the PDF (ADR-006).
 
 ## Rough slice list
-1. **Signed in on the real server.** The riskiest: Access, the token check,
-   the Cloudflare-only server block, the socket, the sandboxed units, the
-   first migration (`users`), `cvwriter create-user`, `scripts/deploy.sh`
-   from CI, `/api/health`, JSON logs, the route test and the log test. The
-   user sees their own email on an empty Settings page.
-2. **Contact block.** Read and save it; the trace from screen to database;
-   rate, errors and duration per route; the accessibility check.
-3. **Storage and numbers.** Both buckets and keys, the canary object and the
-   smoke test's signed link; the memory baseline; the CI time.
+Riskiest first. What each slice holds is settled in its own plan.
+1. Signed in on the real server
+2. Contact block
+3. Storage and numbers
 
 ## Open questions
 None.
@@ -135,8 +135,8 @@ None.
 |---|---|---|---|
 | Users | 1 | PRD, Load | — |
 | Requests per second | < 1 | PRD, Load | Uptime 99% |
-| Contact block saves | A few, ever | One block, edited rarely | — |
-| Deploys | A few a day at most | One per merge to `main` | CI time (recorded) |
+| Contact block saves | ≤ 10 a year | Estimate: one block, edited when contact details change | — |
+| Deploys | ≤ 10 a day | Estimate: one per merge to `main` | None; CI time is a baseline to measure, not a budget |
 
 ### Trust boundaries crossed
 - Browser → Cloudflare → nginx → app (TB-1): Access token checked by the app
@@ -146,6 +146,9 @@ None.
   contact block stays out of them.
 - Other sites on the server (TB-5): the app has its own user, no TCP port,
   and sandboxed units.
+- CI → server (TB-6): the server fetches the release and checks its SHA-256,
+  its signed build record (this repository's deploy workflow, `main`) and its
+  run number before deploying; CI holds no credential for the server.
 
 ### Key choices
 | The choice | The option not taken | Why |
@@ -156,11 +159,12 @@ None.
 | The skeleton stays on Spaces alone | A locked second copy now | The owner's choice for the smallest working version; ADR-004's trigger brings it in |
 | The Typst spike moves to the CV-render slice | Keep it in the skeleton | The design 1 mock doesn't exist yet (ADR-006) |
 | The progress-stream check becomes acceptance criteria in the Generate slice | A spike now | The fix is known, and the skeleton has no stream to test |
+| The server pulls its deploys and checks the signed build (T-42) | CI pushes over SSH with a deploy-only key | The server is shared (A-3): a CI secret that reaches it would widen TB-5; with pull, CI holds none |
 
 ### Risky slices
 | Slice | Class (DATA, ACCESS or SHARED) | The assumption it tests | What changes if it is wrong |
 |---|---|---|---|
-| 1. Signed in on the real server | ACCESS, SHARED | Access plus the token check keep everyone else out, and new units on the shared server don't disturb the other sites | Sign-in (A-5, T-39, T-40) or the server units change before anything personal is stored |
+| 1. Signed in on the real server | ACCESS, SHARED | Access plus the token check keep everyone else out, new units on the shared server don't disturb the other sites, and the server can deploy itself from a checked build | Sign-in (A-5, T-39, T-40), the server units or the deploy path (T-42) change before anything personal is stored |
 | 2. Contact block | DATA | Personal data can be saved and traced without reaching a log or a span | The logging and tracing set-up changes before ads arrive |
 | 3. Storage and numbers | SHARED | The deploy can prove storage works, and the app fits in the server's free memory | The storage set-up, or the hosting choice (A-3's memory trigger) |
 

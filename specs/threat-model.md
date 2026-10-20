@@ -2,9 +2,10 @@
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-THREAT-MODEL.md.
      Status: every accepted threat decided (A-1 to A-7); ready for review.
-     senior-lead-Opus5.5-agent, 2026-10-20: T-37 after the Spaces test (ADR-006); go-live defined. -->
+     senior-lead-Opus5.5-agent, 2026-10-20: T-37 after the Spaces test (ADR-006); go-live defined;
+     TB-6 and T-42, the server pulls its deploys. -->
 
-Last updated: 2026-10-20, T-37 after the Spaces test; go-live defined
+Last updated: 2026-10-20, T-37 after the Spaces test; go-live defined; TB-6 and T-42 (pull deploy)
 
 ## Assets
 | Asset | Who may read it | Who may change it |
@@ -26,6 +27,7 @@ Last updated: 2026-10-20, T-37 after the Spaces test; go-live defined
 | TB-3 | App and browser to Spaces | The app (keys); the browser (signed links) | DigitalOcean | PDFs, uploaded files, encrypted dumps; signed download links |
 | TB-4 | App and server to the telemetry backend | The app; the server's log shipper | Grafana Cloud | Route patterns, timings and counts; the server's SSH sign-in and sudo events; no personal data |
 | TB-5 | The shared server | Other sites and their users on the same server | cvwriter's processes, files and database | Memory and CPU contention; anything a compromised neighbour reaches |
+| TB-6 | CI to the server (deploys) | GitHub Actions, building from `main` | The server's deploy timer | The release archive, its SHA-256 and its signed build record, fetched by the server. No credential for the server crosses: CI holds none |
 
 ## Riskiest flows
 1. **Sign-in and the session:** crosses TB-1.
@@ -94,7 +96,8 @@ Last updated: 2026-10-20, T-37 after the Spaces test; go-live defined
 | T-36 | A local process skips nginx, calls the app directly and fakes the client IP, defeating the per-IP sign-in delays | Spoofing | Rule: no TCP port; the app listens on a unix socket that only nginx's user can open | Architecture, Server units; socket permission test |
 | T-37 | Root on the server deletes every backup and every old file version | Tampering | Rule: the server's code never overwrites or deletes an object; one key per bucket, and the backup job runs as its own user; the nightly check reports a changed or missing object. Spaces keys can still delete old versions (ADR-006), so the rest is accepted in A-3 until ADR-004's trigger adds a locked second copy | Architecture, One-time setup; ADR-006 |
 | T-38 | A server compromise goes unnoticed | Repudiation | Rule: SSH sign-ins and sudo events are shipped off the server, with an alert on either by an account other than the admin account | Architecture, Telemetry |
-| T-41 | The CI service is down, so reviews, merges and deploys stop | Denial of service | Rule: the running app, backups and alerts don't depend on CI; CI deploys only by calling `scripts/deploy.sh`, which can also be run by hand; runbook below | Architecture, Deploy order; Runbooks |
+| T-41 | The CI service is down, so reviews, merges and deploys stop | Denial of service | Rule: the running app, backups and alerts don't depend on CI; CI only builds and signs the release, and every deploy runs `scripts/deploy.sh` on the server, which can also be run by hand; runbook below | Architecture, Deploy order; Runbooks |
+| T-42 | A build that didn't come from a merge to `main` is deployed: a stolen CI secret, a tampered download, or an older build replayed | Tampering, Elevation of privilege | Rule: the server pulls its deploys, so CI holds no credential that reaches the server. The deploy timer fetches as `cvwriter-deploy`, a user with no sudo, and runs `scripts/deploy.sh` only on a build whose SHA-256 matches, whose signed build record names this repository's deploy workflow on `main`, and whose run number is higher than the running one's. A failed check or a failed deploy alerts. A real merge to `main` still deploys: that is guarded by the merge rules (review, test lock), not here | Architecture, Server units and Deploy order |
 
 ## Go-live
 Go-live is the moment the first real job ad or Claude API key is stored on the server (feature 1's first slice). Every rule marked "before go-live" holds from then: T-34's server-wide sudo rule, T-38's off-server log, and the app's password sign-in (A-5). Until then the server holds only the contact block, the same details every CV carries. cvwriter's own units are sandboxed from the first deploy.
@@ -136,7 +139,7 @@ Go-live is the moment the first real job ad or Claude API key is stored on the s
 1. Check the provider's status page. The running app, backups and alerts don't depend on it; only reviews, the test lock, deploys, the daily sweep and the tripwire wait.
 2. Default: wait. Pull requests queue and nothing is lost. Never remove a required check to get a merge through.
 3. An urgent fix: the owner merges it with the admin bypass. The daily sweep lists it under "Merged without a PASS".
-4. Deploy it by running `scripts/deploy.sh` by hand, with the owner's OK. It is the same script CI runs, in the same order.
+4. Deploy it by hand, with the owner's OK: build it on the laptop, copy it to the server as the admin account, and run `scripts/deploy.sh` on that folder. It is the same script the deploy timer runs, in the same order; only this path skips the signed-build check, because no CI run signed it and the admin account already has root.
 5. When Actions is back: run the reviewer on the merged change and record its verdict on the pull request.
 
 **A backup fails, or the restore test fails**
