@@ -1,9 +1,10 @@
 # Architecture: cvwriter
 
 <!-- prd-interviewer-Opus5.5-agent, 2026-10-19. From docs/claude-pkg/TEMPLATE-ARCHITECTURE.md.
-     Status: draft, awaiting the owner's approval. -->
+     Status: draft, awaiting the owner's approval.
+     senior-lead-Opus5.5-agent, 2026-10-20: pre-skeleton spike results (ADR-006), go-live. -->
 
-Last updated: 2026-10-19, first draft (depends on ADR-003, ADR-004 and ADR-005)
+Last updated: 2026-10-20, spike results from before the walking skeleton (ADR-006)
 
 ## Domain model
 
@@ -128,7 +129,7 @@ Every query on a user-owned table filters on `user_id`; a CI check enforces it (
 | Unit | Runs | Credentials (`LoadCredential=`) | Limits |
 |---|---|---|---|
 | `cvwriter.socket` | The unix socket `/run/cvwriter.sock`, owned by `cvwriter`, group `www-data`, mode 0660: only nginx's user can open it, and there is no TCP port | — | — |
-| `cvwriter.service` | The app, as user `cvwriter`, on the socket from `cvwriter.socket`, behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton; `Restart=on-failure` |
+| `cvwriter.service` | The app, as user `cvwriter`, on the socket from `cvwriter.socket`, behind nginx | `master-key` (ADR-001), `files-key` (ADR-004) | `MemoryMax=`, `GOMEMLIMIT` from memory measured in the walking skeleton (a baseline; measured again with PDF rendering, ADR-006); `Restart=on-failure` |
 | `cvwriter-migrate.service` | Oneshot, `cvwriter migrate`, as `cvwriter_owner` | `db-owner-password` | Started only by deploy |
 | `cvwriter-backup.service` + `.timer` | Oneshot, nightly; monthly it also runs the restore test | `backups-key`, `files-key` (read for the fingerprint check), `db-owner-password`, `age-key` | `Nice=`, `IOSchedulingClass=idle` |
 
@@ -136,12 +137,12 @@ Hardening on every unit: `NoNewPrivileges=yes`, `ProtectSystem=strict`, `Protect
 
 ### One-time setup
 1. As the database superuser: create roles `cvwriter_owner` (LOGIN, owns database `cvwriter`) and `cvwriter` (LOGIN, CONNECT only). Neither is a superuser (ADR-002).
-2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004). Neither key may delete object versions. The walking skeleton checks whether Spaces can grant that; if not, the fallback is chosen then and recorded here.
+2. Create both Spaces buckets, enable versioning through the API, and create one key per bucket (ADR-004). Spaces can't make a key that writes without deleting: a Read/Write key can delete an old version, though not suspend versioning or add a lifecycle rule (checked 2026-10-20, ADR-006). Until ADR-004's trigger adds a locked second copy, the keys stay one per bucket, and the backup job runs as its own user.
 3. Create an `age` key pair. Install the private key and every other credential as root-only files (mode 0400) referenced by the units.
 4. The owner keeps an offline copy of the master key and the `age` private key, never in a bucket or in git, and decrypts one dump with that copy to prove it works.
 5. The subdomain (ADR-005): a proxied DNS record at Cloudflare, an nginx server block with a certificate, and `proxy_set_header X-Real-IP $remote_addr`. The old path on the shared site redirects to the subdomain, with or without a trailing slash, keeping the rest of the path: `302` until the subdomain is verified, then `301`. The Access apps (step 7) exist before the DNS record does.
-6. Before go-live, on the shared server: no service runs as an account that can use sudo, and every account with full sudo is a named admin account in use. A log shipper sends SSH sign-ins and sudo events to Grafana Cloud.
-7. Cloudflare Access (Sign-in): turn on Zero Trust on the free plan and check that independent MFA is offered there (if not, sign in through a GitHub account protected by a passkey instead, and record that here). Add the One-time PIN identity provider; allow Biometrics only, not applied to all apps; enrol the laptop's Touch ID; create both Access apps; put the AUD tag in the app's config. The Cloudflare account itself has its own second factor.
+6. Before go-live (threat model, "Go-live"), on the shared server: no service runs as an account that can use sudo, and every account with full sudo is a named admin account in use. A log shipper sends SSH sign-ins and sudo events to Grafana Cloud.
+7. Cloudflare Access (Sign-in): turn on Zero Trust on the free plan; independent MFA with Biometrics is offered there (checked 2026-10-20). Add the One-time PIN identity provider; allow Biometrics only, not applied to all apps; enrol the laptop's Touch ID; create both Access apps; put the AUD tag in the app's config. The Cloudflare account itself has its own second factor.
 
 ### Deploy order (every merge to `main`)
 CI only calls `scripts/deploy.sh`; every step below lives in that script, so a deploy by hand when CI is down runs exactly the same steps (threat model, T-41).
@@ -159,7 +160,7 @@ CI only calls `scripts/deploy.sh`; every step below lives in that script, so a d
   - Encryption protects the dumps if the bucket or its key leaks. The private key is a server credential (for the restore test), and the owner's offline copy means a lost server doesn't lose the backups.
   - Every object in `cvwriter-files` is checked against the SHA-256 and size stored in `cv_versions` and `reference_cvs`.
   - Success writes a metric. An alert fires when no success has happened in 26 hours, or on any mismatch.
-- **Retention:** dumps are kept 90 days, removed by a lifecycle rule on the bucket, not by the server's key (which can't delete). Files rely on versioning, and older versions are kept (ADR-004).
+- **Retention:** dumps are kept 90 days, removed by a lifecycle rule on the bucket, never by the server's code (its key could delete, ADR-006). Files rely on versioning, and older versions are kept (ADR-004).
 - **Restore test, monthly and automated:** the latest dump is decrypted, restored into a scratch database, and its row counts are compared with production; then the scratch database is dropped. A failure alerts.
 - **Accepted risk:** files and backups share one provider and one account (ADR-004).
 
@@ -167,7 +168,7 @@ CI only calls `scripts/deploy.sh`; every step below lives in that script, so a d
 - Traces and metrics go over OTLP to Grafana Cloud. Browser spans are relayed through `/api/telemetry`, which requires sign-in and has size and rate limits (ADR-003).
 - An uptime probe hits `/api/health`.
 - Alerts: the uptime probe, the backup's last success, the restore test, Claude spend at the user's alert level, the nightly fingerprint check, and an SSH sign-in or sudo use by an account other than the admin account.
-- The walking skeleton checks that a CV job's SSE stream survives Cloudflare's 100-second idle limit (progress events keep it busy).
+- A CV job's SSE stream must survive Cloudflare's 100-second idle limit and nginx's `proxy_read_timeout` (60 s by default): the Generate slice's acceptance criteria cover a heartbeat well under both and nginx buffering turned off for the stream. If the stream still drops, the page polls the job's status instead.
 
 ## Scale path
 Sized for the PRD's load: one user, ~250 ads and ~500 CV versions a year. Growth is handled by measured triggers, not by building ahead.
