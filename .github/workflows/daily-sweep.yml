@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
+      actions: read # read the reviewer environment's branch rules
       issues: write
       pull-requests: read
       checks: read
