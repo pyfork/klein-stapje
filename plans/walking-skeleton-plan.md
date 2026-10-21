@@ -15,7 +15,7 @@
 ## Slice 1
 - **Slice brief:** specs/features/walking-skeleton/S-001.md
 - **Statement:** When the owner deploys a release by hand, the server runs it only if its health check passes
-- **Criteria:** AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-12, AC-13, AC-14
+- **Criteria:** AC-1, AC-2, AC-3, AC-4, AC-5, AC-6, AC-7, AC-8, AC-9, AC-10, AC-11, AC-12, AC-13, AC-14, AC-15
 - **Risk class:** SHARED. No feature in this repository relies on the
   shared pieces yet, and no tests exist yet. On the server, the other sites
   share systemd, the PostgreSQL 18 cluster and the memory. This slice adds
@@ -31,7 +31,10 @@
   read only (its systemd and PostgreSQL versions, PostgreSQL's local
   authentication, and the `cvwriter` unit and folder left from an earlier
   setup); the build PR reads it again and attaches the record before it
-  changes anything; the architecture's Server units and
+  changes anything. WATCH holds only if that read shows the earlier
+  `cvwriter` unit disabled and not running, and nothing listening where
+  the shared site's old `/cvwriter/` path would send traffic; if it shows
+  otherwise, the build stops and the slice is re-planned; the architecture's Server units and
   Deploy order, threat model T-34, T-36 and T-41, ADR-003, the go-chi stack
   file's production checks, and the Command-line error pattern.
 - **Threat model:** unchanged, because this slice builds T-36 (a unix
@@ -58,21 +61,22 @@
     with exactly `{"status":"ok"}`; a database that answers after about
     1.7 s gives 200, one that answers after about 2.5 s, hangs or is stopped gives
     503 within 3 s as `application/problem+json` with only `type`, `title`
-    and `status`; `GET /`, `GET /api/me` and `POST /api/health` give 404 the
+    and `status`, naming no path, role, database or driver error; `GET /`, `GET /api/me` and `POST /api/health` give 404 the
     same way; no TCP or UDP port; every log line is JSON with `service` and
     `version`, with `invocation_id` when `INVOCATION_ID` is set and without
     it when not, and releases the deploy starts log their own version; an
     unknown command exits 2 without echoing it, a missing
     `CVWRITER_DATABASE_URL` or socket exits 1 naming it, each as a line
     under 80 characters on standard error.
-  - CHECK 2, the deploy script (AC-9 to AC-13): `s001-a`, `s001_b.2` and a
+  - CHECK 2, the deploy script (AC-9 to AC-13, AC-15): `s001-a`, `s001_b.2` and a
     64-character version deploy in turn and earlier folders stay; the
     earlier `s001-a`, deployed again, is unpacked afresh; a release healthy
     after about 9 s is kept and one healthy only after about 12 s is
-    switched back, with the earlier release's unit files installed again and
-    healthy; on a fresh root, a first release healthy after about 9 s is
-    kept and one healthy only after about 12 s leaves the app and socket
-    stopped and no `current`; the running version, an empty version, `.`,
+    switched back, as is one that answers in time with 503, each with the
+    earlier release's unit files installed again and healthy; on a fresh
+    root, a first release healthy after about 9 s is kept, and one healthy
+    only after about 12 s or answering 503 leaves the app and socket stopped
+    and no `current`; the running version, an empty version, `.`,
     `..`, `../x`, `-a`, `a b`, `a;b`, `s001-é` and 65 characters are
     refused with nothing changed; a release archived with group- and
     world-writable files, deployed under umask 000 so a plain unpack would

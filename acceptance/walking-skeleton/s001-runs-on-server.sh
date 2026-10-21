@@ -11,7 +11,7 @@
 # is recorded on the server in the build PR.
 #
 #   CHECK 1  the app: AC-1 to AC-8
-#   CHECK 2  the deploy script: AC-9 to AC-13
+#   CHECK 2  the deploy script: AC-9 to AC-13, AC-15
 #   CHECK 3  the unit files: AC-14
 set -euo pipefail
 
@@ -118,6 +118,9 @@ assert isinstance(b, dict) and set(b) == {"type", "title", "status"}, b
 assert b["status"] == int(sys.argv[2]), b
 PY
 }
+names_nothing() { # the 503 body holds no path, role, database or driver text
+  ! grep -qiE "$WORK|pgsock|cvwriter|postgres|dial|connect|refused|timeout|context" "$WORK/body"
+}
 within() { python3 -c "import sys; sys.exit(0 if float('$1') <= float('$2') else 1)"; }
 start_app() { # <socket> <log file> [INVOCATION_ID]: serve on a fresh socket
   rm -f "$1"
@@ -178,6 +181,7 @@ pg_resume
 [ "$code" = 503 ] || fail "AC-2: a hung database gave $code, not 503"
 within "$secs" 3.0 || fail "AC-2: a hung database took ${secs}s, over 3"
 problem_only 503 || fail "AC-2: 503 isn't application/problem+json with only type, title, status"
+names_nothing || fail "AC-2: the hung-database 503 names a path, role, database or error: $(cat "$WORK/body")"
 ok "AC-2 hung database: 503 in ${secs}s"
 
 # AC-2: the database is stopped -> 503 within 3 s
@@ -186,6 +190,7 @@ read -r code secs < <(health "$SOCK")
 [ "$code" = 503 ] || fail "AC-2: a stopped database gave $code, not 503"
 within "$secs" 3.0 || fail "AC-2: a stopped database took ${secs}s, over 3"
 problem_only 503 || fail "AC-2: 503 isn't application/problem+json with only type, title, status"
+names_nothing || fail "AC-2: the stopped-database 503 names a path, role, database or error: $(cat "$WORK/body")"
 pg_start
 ok "AC-2 stopped database: 503 in ${secs}s"
 
@@ -306,6 +311,8 @@ fixture() { # <version> <wrapper body>
 }
 fixture s001-slow12 'sleep 12; exec "$(dirname "$0")/cvwriter.real" "$@"'
 fixture s001-slow9 'sleep 9; exec "$(dirname "$0")/cvwriter.real" "$@"'
+# Starts at once, but its database can't be reached: health answers 503 in time
+fixture s001-unhealthy 'export CVWRITER_DATABASE_URL="host=/nonexistent-s001 dbname=cvwriter user=cvwriter"; exec "$(dirname "$0")/cvwriter.real" "$@"'
 bad_version() { # <archive name> <version text>: s001_b.2 with another version file
   local d="$WORK/fx/bad-$1"; rm -rf "$d"; mkdir -p "$d"
   tar -C "$d" -xzf "$WORK/cvwriter-s001_b.2.tar.gz"; printf '%s' "$2" >"$d/version"
@@ -344,15 +351,15 @@ deploy "$WORK/cvwriter-$V64.tar.gz"
 [ -d "$CVWRITER_ROOT/releases/s001-a" ] && [ -d "$CVWRITER_ROOT/releases/s001_b.2" ] || fail "AC-9: an earlier release's folder was removed"
 ok "AC-9 s001-a, s001_b.2 and a 64-character version deployed in turn; earlier folders kept"
 
-# AC-9: an earlier version whose folder exists, not running, is unpacked again
+# AC-15: an earlier version whose folder exists, not running, is unpacked again
 chmod u+w "$CVWRITER_ROOT/releases/s001-a" && touch "$CVWRITER_ROOT/releases/s001-a/stale-marker" \
   || fail "setup: couldn't mark s001-a's folder"
 deploy "$WORK/cvwriter-s001-a.tar.gz"
-[ "$rc" = 0 ] && [ "$(running)" = s001-a ] || fail "AC-9: deploying the earlier s001-a again failed (exit $rc)"
-[ ! -e "$CVWRITER_ROOT/releases/s001-a/stale-marker" ] || fail "AC-9: s001-a's folder wasn't unpacked afresh"
-units_of s001-a || fail "AC-9: the installed unit files aren't s001-a's after deploying it again"
-one_line_naming s001-a || fail "AC-9: output isn't one line naming s001-a"
-ok "AC-9 earlier version deployed again, its folder unpacked afresh"
+[ "$rc" = 0 ] && [ "$(running)" = s001-a ] || fail "AC-15: deploying the earlier s001-a again failed (exit $rc)"
+[ ! -e "$CVWRITER_ROOT/releases/s001-a/stale-marker" ] || fail "AC-15: s001-a's folder wasn't unpacked afresh"
+units_of s001-a || fail "AC-15: the installed unit files aren't s001-a's after deploying it again"
+one_line_naming s001-a || fail "AC-15: output isn't one line naming s001-a"
+ok "AC-15 earlier version deployed again, its folder unpacked afresh"
 
 # AC-13: modes and owner come from the deploy, not the archive. The deploy
 # runs under umask 000, so a plain unpack would keep the archive's modes
@@ -394,6 +401,16 @@ read -r code secs < <(health "$CVWRITER_SOCKET")
 one_line_naming s001-slow12 health || fail "AC-10: output isn't one line naming s001-slow12 and the health check"
 ok "AC-10 release healthy only after about 12 s switched back"
 
+# AC-10: a release that answers in time, but with 503 -> switched back
+deploy "$WORK/cvwriter-s001-unhealthy.tar.gz"
+[ "$rc" = 1 ] || fail "AC-10: a release answering 503 exited $rc, not 1"
+[ "$(running)" = s001-slow9 ] || fail "AC-10: current doesn't point back to s001-slow9 after a 503"
+units_of s001-slow9 || fail "AC-10: s001-slow9's unit files weren't installed again after a 503"
+read -r code secs < <(health "$CVWRITER_SOCKET")
+[ "$code" = 200 ] || fail "AC-10: after switching back from a 503, health gave $code"
+one_line_naming s001-unhealthy health || fail "AC-10: output isn't one line naming s001-unhealthy and the health check"
+ok "AC-10 release answering 503 in time switched back"
+
 # AC-12: refused versions change nothing; the running version is refused too
 for a in "$WORK/cvwriter-s001-slow9.tar.gz" "$WORK"/cvwriter-bad-*.tar.gz; do
   snapshot "$WORK/before"
@@ -421,6 +438,16 @@ grep -qx "stop cvwriter.socket cvwriter.service" "$WORK/fake/calls" || fail "AC-
 [ ! -f "$WORK/fake/pid" ] || fail "AC-11: the app is still running"
 one_line_naming s001-slow12 health || fail "AC-11: output isn't one line naming s001-slow12 and the health check"
 ok "AC-11 first release healthy only after about 12 s: app and socket stopped, no current"
+
+# AC-11: a first release that answers in time, but with 503
+new_root
+deploy "$WORK/cvwriter-s001-unhealthy.tar.gz"
+[ "$rc" = 1 ] || fail "AC-11: a first release answering 503 exited $rc, not 1"
+[ ! -e "$CVWRITER_ROOT/current" ] && [ ! -L "$CVWRITER_ROOT/current" ] || fail "AC-11: current still exists after a 503"
+grep -qx "stop cvwriter.socket cvwriter.service" "$WORK/fake/calls" || fail "AC-11: the app and its socket weren't stopped after a 503"
+[ ! -f "$WORK/fake/pid" ] || fail "AC-11: the app is still running after a 503"
+one_line_naming s001-unhealthy health || fail "AC-11: output isn't one line naming s001-unhealthy and the health check"
+ok "AC-11 first release answering 503: app and socket stopped, no current"
 new_root
 echo "CHECK 2 passed"
 
